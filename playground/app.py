@@ -1,6 +1,7 @@
 import sys
 import time
 import random
+import datetime
 
 import gevent
 
@@ -15,6 +16,8 @@ from devp2p.protocol import BaseProtocol
 from devp2p.service import WiredService, BaseService
 from devp2p.utils import colors, COLOR_END
 from devp2p import app_helper
+
+from .tcpconsole import startConsole
 
 try:
     import ethereum.slogging as slogging
@@ -31,7 +34,7 @@ class ChatMessage(rlp.Serializable):
         ('sender', rlp.sedes.binary),
         ('content', rlp.sedes.binary),
     ]
-    
+
     @classmethod
     def create(cls, ts=None, sender=b'', content=""):
         if ts is None:
@@ -71,7 +74,7 @@ class PlaygroundProtocol(BaseProtocol):
 class DuplicateFilter(object):
     def __init__(self):
         self.set = set()
-    
+
     def check(self, item):
         if item in self.set:
             return False
@@ -81,14 +84,20 @@ class DuplicateFilter(object):
 class PlaygroundService(WiredService):
     name = 'playgroundservice'
     default_config = {}
-    
+
     wire_protocol = PlaygroundProtocol
-    
+
     def __init__(self, app):
         self.config = app.config
         self.address = privtopub_raw(decode_hex(self.config['node']['privkey_hex']))
         self.ts_filter = DuplicateFilter()
+        self.chat_handlers = []
+
         super(PlaygroundService, self).__init__(app)
+
+    def start(self):
+        self._start_console()
+        super(PlaygroundService, self).start()
 
     def log(self, text, **kargs):
         node_num = self.config['node_num']
@@ -104,26 +113,48 @@ class PlaygroundService(WiredService):
         self.log('broadcasting', cmd=cmd, args=args)
         self.app.services.peermanager.broadcast(PlaygroundProtocol, cmd,
                 args=args, exclude_peers = [origin.peer] if (origin is not None) else [])
-        
+
+    def send_chat(self, text):
+        msg = ChatMessage.create(sender=self.address, content=text)
+        self.broadcast('chat', msg)
+
+    def _start_console(self):
+        def on_connect(address, reply):
+            self.chat_handlers.append(reply)
+        def on_cmd(msg, *_):
+            self.send_chat(msg)
+
+        cons_port = self.config['p2p']['listen_port'] - 100
+        self.log('starting console', port=cons_port)
+        startConsole(cons_port, on_connect, on_cmd)
+        self.log('started console', port=cons_port)
 
     def on_wire_protocol_start(self, proto):
         self.log('--------------------------------')
         self.log('wire_proto_start', peers=self.app.services.peermanager.peers)
         assert isinstance(proto, self.wire_protocol)
         proto.receive_chat_callbacks.append(self.on_receive_chat)
-        
-        msg = ChatMessage.create(sender=self.address, content=":3")
+
         gevent.sleep(random.random())
-        self.broadcast('chat', msg)
-    
+        self.send_chat(":3")
+
     def on_receive_chat(self, proto, chatmsg):
         assert isinstance(chatmsg, ChatMessage)
         assert isinstance(proto, self.wire_protocol)
+        peer = encode_hex(proto.peer.remote_pubkey)[:5]
+        sender = encode_hex(chatmsg.sender)[:5]
         self.log('--------------------------------')
-        self.log('received chat', msg=chatmsg, peer=encode_hex(proto.peer.remote_pubkey)[:5])
+        self.log('received chat', msg=chatmsg, peer=peer)
+
+        for h in self.chat_handlers:
+            h("{0:%H:%M:%S} <{1}> {2}".format(
+                    datetime.datetime.fromtimestamp(chatmsg.ts / 1000),
+                    sender,
+                    chatmsg.content_str,
+                ))
+
         if (self.ts_filter.check(chatmsg.ts)):
             self.broadcast('chat', chatmsg, origin=proto)
-
 
 class PlaygroundApp(BaseApp):
     client_name = 'playgrond'
@@ -134,9 +165,9 @@ class PlaygroundApp(BaseApp):
     default_config = dict(BaseApp.default_config)
     default_config['client_version_string'] = client_version_string
     default_config['post_app_start_callback'] = None
-    
+
     #services = [NodeDiscovery, PeerManager, PlaygroundService]
-    
+
     def __init__(self, config=default_config):
         super(PlaygroundApp, self).__init__(config)
         #for service in PlaygroundApp.services:

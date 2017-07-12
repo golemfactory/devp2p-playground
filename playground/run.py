@@ -52,5 +52,5 @@ def run(app_class, service_class, num_nodes=3, all_nodes=0, seed=0, min_peers=2,
     serve_until_stopped(apps)
 
 if __name__ == '__main__':
-    run(PlaygroundApp, PlaygroundService, num_nodes=3, all_nodes=6, max_peers=3, min_peers=2)
+    run(PlaygroundApp, PlaygroundService, num_nodes=3, all_nodes=4, max_peers=2, min_peers=1)
     #run(PlaygroundApp, PlaygroundService, bootstrap_nodes=sys.argv[1:])
