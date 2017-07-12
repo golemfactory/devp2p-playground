@@ -11,12 +11,15 @@ from devp2p.utils import host_port_pubkey_to_uri, update_config_with_defaults
 
 from .app import PlaygroundApp, PlaygroundService
 
-def run(app_class, service_class, num_nodes=3, seed=0, min_peers=2, max_peers=2, random_port=False, bootstrap_nodes=[]):
+def run(app_class, service_class, num_nodes=3, all_nodes=0, seed=0, min_peers=2, max_peers=2, random_port=False, bootstrap_nodes=[]):
     gevent.get_hub().SYSTEM_ERROR = BaseException
     if random_port:
         base_port = random.randint(10000, 60000)
     else:
         base_port = 29870
+
+    if not all_nodes:
+        all_nodes = num_nodes
 
     # get bootstrap node (node0) enode
     bootstrap_node_privkey = mk_privkey('%d:udp:%d' % (seed, 0))
@@ -35,7 +38,7 @@ def run(app_class, service_class, num_nodes=3, seed=0, min_peers=2, max_peers=2,
     base_config['discovery']['bootstrap_nodes'] = bootstrap_nodes
     base_config['seed'] = seed
     base_config['base_port'] = base_port
-    base_config['num_nodes'] = num_nodes
+    base_config['num_nodes'] = all_nodes
     base_config['min_peers'] = min_peers
     base_config['max_peers'] = max_peers
 
@@ -49,5 +52,5 @@ def run(app_class, service_class, num_nodes=3, seed=0, min_peers=2, max_peers=2,
     serve_until_stopped(apps)
 
 if __name__ == '__main__':
-    #run(PlaygroundApp, PlaygroundService, num_nodes=2, max_peers=1, min_peers=1)
-    run(PlaygroundApp, PlaygroundService, bootstrap_nodes=sys.argv[1:])
+    run(PlaygroundApp, PlaygroundService, num_nodes=3, all_nodes=6, max_peers=3, min_peers=2)
+    #run(PlaygroundApp, PlaygroundService, bootstrap_nodes=sys.argv[1:])
