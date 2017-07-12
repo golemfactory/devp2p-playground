@@ -24,7 +24,6 @@ try:
     slogging.configure(config_string=':debug,p2p.discovery:info')
 except:
     import devp2p.slogging as slogging
-    slogging.configure(':debug,p2p.discovery:info')
 
 log = slogging.get_logger('app')
 
