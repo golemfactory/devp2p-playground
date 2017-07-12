@@ -1,0 +1,40 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+ui_*.py
+*.exe
+*.swp
+
+# Vim swap files
+*.swp
+
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+.cache/
+.coverage
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+.idea
+lib/
+lib64/
+sdist/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Logs
+logs/*
+tests/logs/*
+*.log
+
+# virtualenv
+venv/*
