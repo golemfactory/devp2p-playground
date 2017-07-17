@@ -296,6 +296,7 @@ class PlaygroundService(WiredService):
             return
 
         if len(data) == 0:
+            del self.files_in[name]
             f.close()
         else:
             f.write(data)
