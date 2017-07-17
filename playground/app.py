@@ -6,6 +6,7 @@ import asyncio
 
 import gevent
 from gevent.event import AsyncResult
+from gevent.fileobject import FileObjectThread
 
 import rlp
 from rlp.utils import encode_hex, decode_hex, is_integer
@@ -72,6 +73,13 @@ class PlaygroundProtocol(BaseProtocol):
             ('chatmsg', ChatMessage)
         ]
 
+    class file_chunk(BaseProtocol.command):
+        cmd_id = 1
+        structure = [
+            ('name', rlp.sedes.binary),
+            ('data', rlp.sedes.binary),
+        ]
+
 class DuplicateFilter(object):
     def __init__(self):
         self.set = set()
@@ -94,6 +102,7 @@ class PlaygroundService(WiredService):
         self.ts_filter = DuplicateFilter()
         self.chat_handlers = []
         self.pending_connections = {}
+        self.files_in = {}
 
         super(PlaygroundService, self).__init__(app)
 
@@ -167,6 +176,21 @@ class PlaygroundService(WiredService):
             return True
         return False
 
+    def send_file(self, target_pubkey, name):
+        f_raw = open(name, 'rb')
+        f = FileObjectThread(f_raw, 'rb')
+        chunk_size = 2**16
+
+        peer = self.get_peer(target_pubkey).get()
+        if not peer:
+            return False
+
+        while True:
+            data = f.read(chunk_size)
+            peer.protocols[PlaygroundProtocol].send_file_chunk(name, data)
+            if not data:
+                return True
+
     def _start_console(self):
         def on_connect(address, reply):
             self.chat_handlers.append(reply)
@@ -206,11 +230,27 @@ class PlaygroundService(WiredService):
             else:
                 reply("fail")
 
+    def cmd_file(self, args, reply):
+        asplit = args.split(' ', 1)
+        asplit.append('')
+        to, name = asplit[:2]
+        targets = [p.remote_pubkey for p in self.app.services.peermanager.peers
+                   if encode_hex(p.remote_pubkey).startswith(to)]
+        if len(targets) > 1:
+            reply(str([encode_hex(t) for t in targets]))
+        if targets:
+            target = targets[0]
+        else:
+            target = decode_hex(to)
+        ret = self.send_file(target, name)
+        reply('sent file: %s' % ret)
+
     def on_wire_protocol_start(self, proto):
         self.log('--------------------------------')
         self.log('wire_proto_start', peers=self.app.services.peermanager.peers)
         assert isinstance(proto, self.wire_protocol)
         proto.receive_chat_callbacks.append(self.on_receive_chat)
+        proto.receive_file_chunk_callbacks.append(self.on_receive_file)
 
         if proto.peer.remote_pubkey in self.pending_connections:
             future = self.pending_connections[proto.peer.remote_pubkey]
@@ -239,6 +279,26 @@ class PlaygroundService(WiredService):
                 ))
 
         self.broadcast('chat', chatmsg, origin=proto)
+
+    def on_receive_file(self, proto, name, data):
+        assert isinstance(name, bytes)
+        assert isinstance(data, bytes)
+
+        sender = proto.peer.remote_pubkey
+        if not name in self.files_in:
+            f_raw = open(name, 'wb')
+            f = FileObjectThread(f_raw, 'wb')
+            self.files_in[name] = (f, sender)
+
+        f, orig_sender = self.files_in[name]
+        if orig_sender != sender:
+            self.log('recv-file wrong sender', f=f, name=name, sender=sender, orig_sender=orig_sender)
+            return
+
+        if len(data) == 0:
+            f.close()
+        else:
+            f.write(data)
 
 class PlaygroundApp(BaseApp):
     client_name = 'playground'
