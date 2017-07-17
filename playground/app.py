@@ -2,8 +2,10 @@ import sys
 import time
 import random
 import datetime
+import asyncio
 
 import gevent
+from gevent.event import AsyncResult
 
 import rlp
 from rlp.utils import encode_hex, decode_hex, is_integer
@@ -14,7 +16,7 @@ from devp2p.discovery import NodeDiscovery
 from devp2p.peermanager import PeerManager
 from devp2p.protocol import BaseProtocol
 from devp2p.service import WiredService, BaseService
-from devp2p.utils import colors, COLOR_END
+from devp2p.utils import colors, COLOR_END, big_endian_to_int
 from devp2p import app_helper
 
 from .tcpconsole import startConsole
@@ -91,6 +93,7 @@ class PlaygroundService(WiredService):
         self.address = privtopub_raw(decode_hex(self.config['node']['privkey_hex']))
         self.ts_filter = DuplicateFilter()
         self.chat_handlers = []
+        self.pending_connections = {}
 
         super(PlaygroundService, self).__init__(app)
 
@@ -113,26 +116,106 @@ class PlaygroundService(WiredService):
         self.app.services.peermanager.broadcast(PlaygroundProtocol, cmd,
                 args=args, exclude_peers = [origin.peer] if (origin is not None) else [])
 
+    def get_peer(self, pubkey):
+        assert pubkey != self.address
+
+        future = AsyncResult()
+
+        peermanager = self.app.services.peermanager
+
+        for p in peermanager.peers:
+            if p.remote_pubkey == pubkey:
+                future.set(p)
+                return future
+
+        if (pubkey in self.pending_connections):
+            return self.pending_connections[pubkey]
+
+        self.pending_connections[pubkey] = future
+
+        nodeid = big_endian_to_int(pubkey)
+        kademlia_proto = self.app.services.discovery.protocol.kademlia
+        kademlia_proto.find_node(nodeid)
+
+        def try_connect():
+            gevent.sleep(1)
+            neighs = kademlia_proto.routing.neighbours(nodeid, 2)
+            neighs = [n for n in neighs if n.pubkey == pubkey]
+            if not neighs:
+                log('no neighs', nodeid=nodeid)
+                future.set(None)
+            neigh = neighs[0]
+            if not peermanager.connect((neigh.address.ip, neigh.address.tcp_port), neigh.pubkey):
+                log('cannot connect', neigh=neigh)
+                future.set(None)
+            #return [p for p in peermanager.peers if p.remote_pubkey == pubkey][0]
+
+        gevent.spawn(try_connect)
+        
+        return future
+
     def send_chat(self, text):
         msg = ChatMessage.create(sender=self.address, content=text)
         self.broadcast('chat', msg)
 
+    def send_direct_msg(self, target_pubkey, text):
+        msg = ChatMessage.create(sender=self.address, content=text)
+        peer = self.get_peer(target_pubkey).get()
+        if peer:
+            self.log("sending DM", peer=peer, msg=msg)
+            peer.protocols[PlaygroundProtocol].send_chat(msg)
+            return True
+        return False
+
     def _start_console(self):
         def on_connect(address, reply):
             self.chat_handlers.append(reply)
-        def on_cmd(msg, *_):
-            self.send_chat(msg)
+        def on_cmd(msg, address, reply):
+            if msg.startswith('/'):
+                msplit = msg.split(' ', 1)
+                msplit.append('')
+                cmd, args = msplit[:2]
+                cmd = 'cmd_' + cmd[1:]
+                if hasattr(self, cmd) and getattr(self, cmd):
+                    getattr(self, cmd)(args, reply)
+                else:
+                    reply("No such command %s" % cmd)
+            else:
+                self.send_chat(msg)
 
         cons_port = self.config['p2p']['listen_port'] - 100
         self.log('starting console', port=cons_port)
         startConsole(cons_port, on_connect, on_cmd)
         self.log('started console', port=cons_port)
 
+    def cmd_msg(self, args, reply):
+        asplit = args.split(' ', 1)
+        asplit.append('')
+        to, text = asplit[:2]
+        targets = [p.remote_pubkey for p in self.app.services.peermanager.peers
+                   if encode_hex(p.remote_pubkey).startswith(to)]
+        if len(targets) == 1:
+            self.send_direct_msg(targets[0], text)
+        elif targets:
+            reply(str([encode_hex(t) for t in targets]))
+        else:
+            ret = self.send_direct_msg(decode_hex(to), text)
+            self.log('cmd_msg sent?', ret=ret)
+            if ret:
+                reply("sent")
+            else:
+                reply("fail")
+
     def on_wire_protocol_start(self, proto):
         self.log('--------------------------------')
         self.log('wire_proto_start', peers=self.app.services.peermanager.peers)
         assert isinstance(proto, self.wire_protocol)
         proto.receive_chat_callbacks.append(self.on_receive_chat)
+
+        if proto.peer.remote_pubkey in self.pending_connections:
+            future = self.pending_connections[proto.peer.remote_pubkey]
+            if not future.ready():
+                future.set(proto.peer)
 
         gevent.sleep(random.random())
         self.send_chat(":3")
@@ -145,6 +228,9 @@ class PlaygroundService(WiredService):
         self.log('--------------------------------')
         self.log('received chat', msg=chatmsg, peer=peer)
 
+        if not self.ts_filter.check(chatmsg.ts):
+            return
+
         for h in self.chat_handlers:
             h("{0:%H:%M:%S} <{1}> {2}".format(
                     datetime.datetime.fromtimestamp(chatmsg.ts / 1000),
@@ -152,11 +238,10 @@ class PlaygroundService(WiredService):
                     chatmsg.content_str,
                 ))
 
-        if (self.ts_filter.check(chatmsg.ts)):
-            self.broadcast('chat', chatmsg, origin=proto)
+        self.broadcast('chat', chatmsg, origin=proto)
 
 class PlaygroundApp(BaseApp):
-    client_name = 'playgrond'
+    client_name = 'playground'
     version = '0.1'
     client_version = '%s/%s/%s' % (version, sys.platform,
                                    'py%d.%d.%d' % sys.version_info[:3])

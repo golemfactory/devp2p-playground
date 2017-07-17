@@ -3,7 +3,10 @@ from gevent.server import StreamServer
 def startConsole(port, connectHandler, commandHandler):
     def handle(socket, address):
         def reply(msg):
-            socket.sendall(msg.encode())
+            try:
+                socket.sendall((msg + "\n").encode())
+            except:
+                pass
         connectHandler(address, reply)
 
         socket.sendall(b'Hello\n')
@@ -14,7 +17,7 @@ def startConsole(port, connectHandler, commandHandler):
             line = rfile.readline()
             if not line:
                 break
-            commandHandler(line, address, reply)
+            commandHandler(line.strip(), address, reply)
 
         rfile.close()
 
