@@ -133,7 +133,7 @@ class PlaygroundService(WiredService):
         peermanager = self.app.services.peermanager
 
         for p in peermanager.peers:
-            if p.remote_pubkey == pubkey:
+            if p and p.remote_pubkey == pubkey and p.protocols:
                 future.set(p)
                 return future
 
@@ -152,10 +152,12 @@ class PlaygroundService(WiredService):
             neighs = [n for n in neighs if n.pubkey == pubkey]
             if not neighs:
                 log('no neighs', nodeid=nodeid)
+                del self.pending_connections[pubkey]
                 future.set(None)
             neigh = neighs[0]
             if not peermanager.connect((neigh.address.ip, neigh.address.tcp_port), neigh.pubkey):
                 log('cannot connect', neigh=neigh)
+                self.pending_connections[pubkey]
                 future.set(None)
             #return [p for p in peermanager.peers if p.remote_pubkey == pubkey][0]
 
@@ -174,22 +176,24 @@ class PlaygroundService(WiredService):
             self.log("sending DM", peer=peer, msg=msg)
             peer.protocols[PlaygroundProtocol].send_chat(msg)
             return True
+        self.log("NOT sending DM", peer=peer, peerb=bool(peer), msg=msg)
         return False
 
     def send_file(self, target_pubkey, name):
         f_raw = open(name, 'rb')
         f = FileObjectThread(f_raw, 'rb')
-        chunk_size = 2**16
+        chunk_size = 2**24
 
         peer = self.get_peer(target_pubkey).get()
         if not peer:
             return False
 
-        while True:
+        while peer:
             data = f.read(chunk_size)
             peer.protocols[PlaygroundProtocol].send_file_chunk(name, data)
             if not data:
                 return True
+        return False
 
     def _start_console(self):
         def on_connect(address, reply):
@@ -222,13 +226,15 @@ class PlaygroundService(WiredService):
             self.send_direct_msg(targets[0], text)
         elif targets:
             reply(str([encode_hex(t) for t in targets]))
-        else:
+        elif len(to) == 128:
             ret = self.send_direct_msg(decode_hex(to), text)
             self.log('cmd_msg sent?', ret=ret)
             if ret:
                 reply("sent")
             else:
                 reply("fail")
+        else:
+            reply("no such target %s" % target)
 
     def cmd_file(self, args, reply):
         asplit = args.split(' ', 1)
@@ -255,6 +261,7 @@ class PlaygroundService(WiredService):
         if proto.peer.remote_pubkey in self.pending_connections:
             future = self.pending_connections[proto.peer.remote_pubkey]
             if not future.ready():
+                del self.pending_connections[proto.peer.remote_pubkey]
                 future.set(proto.peer)
 
         gevent.sleep(random.random())
