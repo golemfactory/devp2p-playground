@@ -9,7 +9,7 @@ from gevent.event import AsyncResult
 from gevent.fileobject import FileObjectThread
 
 import rlp
-from rlp.utils import encode_hex, decode_hex, is_integer
+from rlp.utils import encode_hex, decode_hex, is_integer, str_to_bytes
 
 from devp2p.app import BaseApp
 from devp2p.crypto import privtopub as privtopub_raw, sha3
@@ -63,7 +63,7 @@ class ChatMessage(rlp.Serializable):
 
 class PlaygroundProtocol(BaseProtocol):
     protocol_id = 1
-    max_cmd_id = 2
+    max_cmd_id = 3
     name = b'playground'
     version = 2
 
@@ -188,6 +188,7 @@ class PlaygroundService(WiredService):
         return False
 
     def send_file(self, target_pubkey, name):
+        name = str_to_bytes(name)
         f_raw = open(name, 'rb')
         f = FileObjectThread(f_raw, 'rb')
         #chunk_size = 2**24
@@ -198,12 +199,16 @@ class PlaygroundService(WiredService):
         if not peer:
             return False
 
+        offset = 0
         self.files_out[target_pubkey, name] = init_win_size
         while peer:
-            chunk_size = min(self.files_out[target_pubkey, name], max_chunk_size)
-            if chunk_size:
+            win_end = self.files_out[target_pubkey, name]
+            win_size = win_end - offset
+            chunk_size = min(win_size, max_chunk_size)
+            self.log('chunk', chunk_size=chunk_size, offset=offset, win_end=win_end, win_size=win_size, target_pubkey=target_pubkey, name=name)
+            if chunk_size > 0:
                 data = f.read(chunk_size)
-                self.files_out[target_pubkey, name] -= chunk_size
+                offset += chunk_size
 
                 peer.protocols[PlaygroundProtocol].send_file_chunk(name, data)
                 if not data:
@@ -276,6 +281,7 @@ class PlaygroundService(WiredService):
         assert isinstance(proto, self.wire_protocol)
         proto.receive_chat_callbacks.append(self.on_receive_chat)
         proto.receive_file_chunk_callbacks.append(self.on_receive_file)
+        proto.receive_file_ack_callbacks.append(self.on_receive_file_ack)
 
         if proto.peer.remote_pubkey in self.pending_connections:
             future = self.pending_connections[proto.peer.remote_pubkey]
@@ -309,13 +315,13 @@ class PlaygroundService(WiredService):
     def on_receive_file(self, proto, name, data):
         assert isinstance(name, bytes)
         assert isinstance(data, bytes)
-        init_window_size = 2**24
+        window_size = 2**24
 
         sender = proto.peer.remote_pubkey
         if not name in self.files_in:
             f_raw = open(name, 'wb')
             f = FileObjectThread(f_raw, 'wb')
-            self.files_in[name] = (f, sender, init_window_size, time.time())
+            self.files_in[name] = (f, sender, window_size, time.time())
 
         f, orig_sender, _, ts = self.files_in[name]
         if orig_sender != sender:
@@ -329,17 +335,17 @@ class PlaygroundService(WiredService):
         else:
             f.write(data)
 
-            f, s, winsize, ts = self.files_in[name]
-            winsize = min(winsize + len(data), init_window_size)
-            self.files_in[name] = f, s, winsize, ts
-            proto.send_file_ack(name, winsize)
+            f, s, win_end, ts = self.files_in[name]
+            win_end += len(data)
+            self.files_in[name] = f, s, win_end, ts
+            proto.send_file_ack(name, win_end)
 
     def on_receive_file_ack(self, proto, name, window):
         assert isinstance(name, bytes)
         assert is_integer(window)
 
-        sender = proto.peer.remote_key
-        if not (sender, name) in self.files_out:
+        sender = proto.peer.remote_pubkey
+        if not ((sender, name) in self.files_out):
             self.log('wild file ack', sender=sender, name=name, window=window)
             return
         self.files_out[sender, name] = window
