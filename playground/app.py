@@ -63,9 +63,9 @@ class ChatMessage(rlp.Serializable):
 
 class PlaygroundProtocol(BaseProtocol):
     protocol_id = 1
-    max_cmd_id = 1
+    max_cmd_id = 2
     name = b'playground'
-    version = 1
+    version = 2
 
     class chat(BaseProtocol.command):
         cmd_id = 0
@@ -78,6 +78,13 @@ class PlaygroundProtocol(BaseProtocol):
         structure = [
             ('name', rlp.sedes.binary),
             ('data', rlp.sedes.binary),
+        ]
+
+    class file_ack(BaseProtocol.command):
+        cmd_id = 2
+        structure = [
+            ('name', rlp.sedes.binary),
+            ('window', rlp.sedes.big_endian_int),
         ]
 
 class DuplicateFilter(object):
@@ -103,6 +110,7 @@ class PlaygroundService(WiredService):
         self.chat_handlers = []
         self.pending_connections = {}
         self.files_in = {}
+        self.files_out = {}
 
         super(PlaygroundService, self).__init__(app)
 
@@ -182,17 +190,28 @@ class PlaygroundService(WiredService):
     def send_file(self, target_pubkey, name):
         f_raw = open(name, 'rb')
         f = FileObjectThread(f_raw, 'rb')
-        chunk_size = 2**24
+        #chunk_size = 2**24
+        init_win_size = 2**12
+        max_chunk_size = 2**16
 
         peer = self.get_peer(target_pubkey).get()
         if not peer:
             return False
 
+        self.files_out[target_pubkey, name] = init_win_size
         while peer:
-            data = f.read(chunk_size)
-            peer.protocols[PlaygroundProtocol].send_file_chunk(name, data)
-            if not data:
-                return True
+            chunk_size = min(self.files_out[target_pubkey, name], max_chunk_size)
+            if chunk_size:
+                data = f.read(chunk_size)
+                self.files_out[target_pubkey, name] -= chunk_size
+
+                peer.protocols[PlaygroundProtocol].send_file_chunk(name, data)
+                if not data:
+                    del self.files_out[target_pubkey, name]
+                    return True
+            else:
+                gevent.sleep(0.1) #FIXME wake up only when window increases
+        del self.files_out[target_pubkey, name]
         return False
 
     def _start_console(self):
@@ -234,7 +253,7 @@ class PlaygroundService(WiredService):
             else:
                 reply("fail")
         else:
-            reply("no such target %s" % target)
+            reply("no such target %s" % to)
 
     def cmd_file(self, args, reply):
         asplit = args.split(' ', 1)
@@ -290,14 +309,15 @@ class PlaygroundService(WiredService):
     def on_receive_file(self, proto, name, data):
         assert isinstance(name, bytes)
         assert isinstance(data, bytes)
+        init_window_size = 2**24
 
         sender = proto.peer.remote_pubkey
         if not name in self.files_in:
             f_raw = open(name, 'wb')
             f = FileObjectThread(f_raw, 'wb')
-            self.files_in[name] = (f, sender)
+            self.files_in[name] = (f, sender, init_window_size)
 
-        f, orig_sender = self.files_in[name]
+        f, orig_sender, _ = self.files_in[name]
         if orig_sender != sender:
             self.log('recv-file wrong sender', f=f, name=name, sender=sender, orig_sender=orig_sender)
             return
@@ -307,6 +327,21 @@ class PlaygroundService(WiredService):
             f.close()
         else:
             f.write(data)
+
+            f, s, winsize = self.files_in[name]
+            winsize = min(winsize + len(data), init_window_size)
+            self.files_in[name] = f, s, winsize
+            proto.send_file_ack(name, winsize)
+
+    def on_receive_file_ack(self, proto, name, window):
+        assert isinstance(name, bytes)
+        assert is_integer(window)
+
+        sender = proto.peer.remote_key
+        if not (sender, name) in self.files_out:
+            self.log('wild file ack', sender=sender, name=name, window=window)
+            return
+        self.files_out[sender, name] = window
 
 class PlaygroundApp(BaseApp):
     client_name = 'playground'
