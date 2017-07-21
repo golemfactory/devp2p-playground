@@ -315,22 +315,23 @@ class PlaygroundService(WiredService):
         if not name in self.files_in:
             f_raw = open(name, 'wb')
             f = FileObjectThread(f_raw, 'wb')
-            self.files_in[name] = (f, sender, init_window_size)
+            self.files_in[name] = (f, sender, init_window_size, time.time())
 
-        f, orig_sender, _ = self.files_in[name]
+        f, orig_sender, _, ts = self.files_in[name]
         if orig_sender != sender:
             self.log('recv-file wrong sender', f=f, name=name, sender=sender, orig_sender=orig_sender)
             return
 
         if len(data) == 0:
+            self.log('download finished', elapsed=(time.time() - ts))
             del self.files_in[name]
             f.close()
         else:
             f.write(data)
 
-            f, s, winsize = self.files_in[name]
+            f, s, winsize, ts = self.files_in[name]
             winsize = min(winsize + len(data), init_window_size)
-            self.files_in[name] = f, s, winsize
+            self.files_in[name] = f, s, winsize, ts
             proto.send_file_ack(name, winsize)
 
     def on_receive_file_ack(self, proto, name, window):
