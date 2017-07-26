@@ -8,6 +8,8 @@ import gevent
 from gevent.event import AsyncResult
 from gevent.fileobject import FileObjectThread
 
+import multihash
+
 import rlp
 from rlp.utils import encode_hex, decode_hex, is_integer, str_to_bytes
 
@@ -21,10 +23,13 @@ from devp2p.utils import colors, COLOR_END, big_endian_to_int
 from devp2p import app_helper
 
 from .tcpconsole import startConsole
+from .swarm import FileSwarmService, FileSession
+from .file import HashedFile
 
 try:
     import ethereum.slogging as slogging
     slogging.configure(config_string=':debug,p2p.discovery:info')
+    #slogging.configure(config_string=':debug,p2p:info')
 except:
     import devp2p.slogging as slogging
 
@@ -85,6 +90,12 @@ class PlaygroundProtocol(BaseProtocol):
         structure = [
             ('name', rlp.sedes.binary),
             ('window', rlp.sedes.big_endian_int),
+        ]
+
+    class file_metainfo(BaseProtocol.command):
+        cmd_id = 3
+        structure = [
+            ('data', rlp.sedes.binary),
         ]
 
 class DuplicateFilter(object):
@@ -159,12 +170,12 @@ class PlaygroundService(WiredService):
             neighs = kademlia_proto.routing.neighbours(nodeid, 2)
             neighs = [n for n in neighs if n.pubkey == pubkey]
             if not neighs:
-                log('no neighs', nodeid=nodeid)
+                self.log('no neighs', nodeid=nodeid)
                 del self.pending_connections[pubkey]
                 future.set(None)
             neigh = neighs[0]
             if not peermanager.connect((neigh.address.ip, neigh.address.tcp_port), neigh.pubkey):
-                log('cannot connect', neigh=neigh)
+                self.log('cannot connect', neigh=neigh)
                 self.pending_connections[pubkey]
                 future.set(None)
             #return [p for p in peermanager.peers if p.remote_pubkey == pubkey][0]
@@ -192,8 +203,8 @@ class PlaygroundService(WiredService):
         f_raw = open(name, 'rb')
         f = FileObjectThread(f_raw, 'rb')
         #chunk_size = 2**24
-        init_win_size = 2**12
-        max_chunk_size = 2**16
+        init_win_size = 2**20
+        max_chunk_size = 2**20
 
         peer = self.get_peer(target_pubkey).get()
         if not peer:
@@ -205,7 +216,7 @@ class PlaygroundService(WiredService):
             win_end = self.files_out[target_pubkey, name]
             win_size = win_end - offset
             chunk_size = min(win_size, max_chunk_size)
-            self.log('chunk', chunk_size=chunk_size, offset=offset, win_end=win_end, win_size=win_size, target_pubkey=target_pubkey, name=name)
+            #self.log('chunk', chunk_size=chunk_size, offset=offset, win_end=win_end, win_size=win_size, target_pubkey=target_pubkey, name=name)
             if chunk_size > 0:
                 data = f.read(chunk_size)
                 offset += chunk_size
@@ -275,6 +286,17 @@ class PlaygroundService(WiredService):
         ret = self.send_file(target, name)
         reply('sent file: %s' % ret)
 
+    def cmd_seed(self, args, reply):
+        filename = str_to_bytes(args)
+        f_raw = open(filename, 'rb')
+        f = FileObjectThread(f_raw, 'rb')
+        hf = HashedFile(fh=f)
+        reply(encode_hex(hf.tophash))
+        fs = FileSession(hf)
+        #TODO: add the content
+        self.app.services.fileswarm.add_session(fs)
+        self.broadcast('file_metainfo', hf.binary_metainfo())
+
     def on_wire_protocol_start(self, proto):
         self.log('--------------------------------')
         self.log('wire_proto_start', peers=self.app.services.peermanager.peers)
@@ -282,6 +304,7 @@ class PlaygroundService(WiredService):
         proto.receive_chat_callbacks.append(self.on_receive_chat)
         proto.receive_file_chunk_callbacks.append(self.on_receive_file)
         proto.receive_file_ack_callbacks.append(self.on_receive_file_ack)
+        proto.receive_file_metainfo_callbacks.append(self.on_receive_file_metainfo)
 
         if proto.peer.remote_pubkey in self.pending_connections:
             future = self.pending_connections[proto.peer.remote_pubkey]
@@ -350,6 +373,14 @@ class PlaygroundService(WiredService):
             return
         self.files_out[sender, name] = window
 
+    def on_receive_file_metainfo(self, proto, data):
+        assert isinstance(data, bytes)
+        hf = HashedFile.from_binary_metainfo(data)
+        #tophash = multihash.digest(data, multihash.Func.sha3_256).encode(None)
+        self.log("receiving metainfo", tophash=hf.tophash)
+        fs = FileSession(hf)
+        self.app.services.fileswarm.add_session(fs)
+
 class PlaygroundApp(BaseApp):
     client_name = 'playground'
     version = '0.1'
@@ -360,14 +391,15 @@ class PlaygroundApp(BaseApp):
     default_config['client_version_string'] = client_version_string
     default_config['post_app_start_callback'] = None
 
+    services = [NodeDiscovery, PeerManager, PlaygroundService, FileSwarmService]
     #services = [NodeDiscovery, PeerManager, PlaygroundService]
 
     def __init__(self, config=default_config):
         super(PlaygroundApp, self).__init__(config)
         #for service in PlaygroundApp.services:
         #    assert issubclass(service, BaseService)
-        #    assert service.name not in self.services
-        #    service.register_with_app(self)
+        #    if service.name not in self.services:
+        #        service.register_with_app(self)
         #    assert service.name in self.services
 
 if __name__ == '__main__':

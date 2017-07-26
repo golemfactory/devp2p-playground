@@ -7,48 +7,49 @@ from devp2p.service import WiredService, BaseService
 
 class FileSwarmProtocol(BaseProtocol):
     protocol_id = 2
-    max_cmd_id = 5
+    max_cmd_id = 6
     name = b'fileswarm'
     version = 1
 
     class bitmap(BaseProtocol.command):
         cmd_id = 0
-        structure [
-            ('file', rlp.sedes.binary),
+        structure = [
+            ('tophash', rlp.sedes.binary),
             ('bitmap', rlp.sedes.binary),
+            ('is_reply', rlp.sedes.big_endian_int),
         ]
 
     class interested(BaseProtocol.command):
         cmd_id = 1
         structure = [
-            ('file', rlp.sedes.binary),
-            ('interested', rlp.sedes.bin_endian_int),
+            ('tophash', rlp.sedes.binary),
+            ('interested', rlp.sedes.big_endian_int),
         ]
 
     class choke(BaseProtocol.command):
         cmd_id = 2
-        structure [
-            ('file', rlp.sedes.binary),
-            ('choked', rlp.sedes.bin_endian_int),
+        structure = [
+            ('tophash', rlp.sedes.binary),
+            ('choked', rlp.sedes.big_endian_int),
         ]
 
     class have(BaseProtocol.command):
         cmd_id = 3
-        structure [
-            ('file', rlp.sedes.binary),
+        structure = [
+            ('tophash', rlp.sedes.binary),
             ('piece_no', rlp.sedes.big_endian_int),
         ]
 
     class request(BaseProtocol.command):
         cmd_id = 4
-        structure [
-            ('file', rlp.sedes.binary),
+        structure = [
+            ('tophash', rlp.sedes.binary),
             ('piece_no', rlp.sedes.big_endian_int),
         ]
 
     class piece(BaseProtocol.command):
         cmd_id = 5
-        structure [
+        structure = [
             ('data', rlp.sedes.binary),
         ]
 
@@ -68,21 +69,34 @@ def bitmap_to_set(bmap):
         for j in range(8):
             if bmap[i] & (0x80 >> j):
                 s.add(j * 8 + i)
+    return s
 
 class FileSession(object):
-    def __init__(self, tophash, piece_count):
-        self.tophash = tophash
+    def __init__(self, hashed_file, piece_count=None):
+        self.hf = hashed_file
+        if piece_count is None and self.hf.hashes:
+            piece_count = len(self.hf.hashes)
+        if piece_count is None:
+            raise ValueError("No piece count")
         self.piece_count = piece_count
-        self.pieces = {}
+        #self.pieces = set()
         self.peers = []
         self.peer_pieces = {}
+
+    @property
+    def tophash(self):
+        return self.hf.tophash
+
+    @property
+    def pieces(self):
+        return self.hf.haveset
 
     @property
     def bitmap(self):
         bmap = []
         x = 0
         for i in range(self.piece_count):
-            x = x << 1 + (i in pieces)
+            x = (x << 1) + (i in self.pieces)
             if i % 8 == 7:
                 bmap.append(x)
                 x = 0
@@ -95,46 +109,60 @@ class FileSession(object):
         self.peer_pieces[peer] = pieces
 
 class FileSwarmService(WiredService):
-    name = b'fileswarm'
+    name = 'fileswarm'
     default_config = {}
 
-    wire_protocol = FireSwarmProtocol
+    wire_protocol = FileSwarmProtocol
 
     def __init__(self, app):
-        super(PlaygroundService, self).__init__(app)
+        super(FileSwarmService, self).__init__(app)
         self.file_sessions = {}
+        self.peers = []
+
+    def log(self, text, **kargs):
+        self.app.services.playgroundservice.log(text, **kargs)
 
     def on_wire_protocol_start(self, proto):
         assert isinstance(proto, self.wire_protocol)
-        self.setup_handlers(proto)
+        self.log("hello")
+        self.peers.append(proto)
+        self._setup_handlers(proto)
 
-        for sess in self.file_session:
-            proto.send_bitmap(sess.tophash, sess.bitmap)
+        for sess in self.file_sessions.values():
+            self.log("send_bitmap", sess=sess)
+            proto.send_bitmap(sess.tophash, sess.bitmap, False)
 
     def _setup_handlers(self, proto):
         proto.receive_bitmap_callbacks.append(self.receive_bitmap)
 
     # handlers
-    def receive_bitmap(self, proto, tophash, bitmap):
+    def receive_bitmap(self, proto, tophash, bitmap, is_reply):
         if not tophash in self.file_sessions:
             return
         sess = self.file_sessions[tophash]
 
+        if sess and not is_reply:
+            proto.send_bitmap(sess.tophash, sess.bitmap, True)
+
         theirs = bitmap_to_set(bitmap)
-        ours = set(sess.pieces.keys())
+        ours = sess.pieces
 
         sess.add_peer(proto, theirs)
 
         only_ours = ours - theirs
         only_theirs = theirs - ours
 
+        self.log('received bitmap', tophash=tophash, bitmap=bitmap, ours=ours, theirs=theirs)
+
         if only_theirs:
-            peer.send_interested(tophash, 1)
+            proto.send_interested(tophash, 1)
 
     # API
 
     def add_session(self, session):
         self.file_sessions[session.tophash] = session
+        for peer in self.peers:
+            peer.send_bitmap(session.tophash, session.bitmap, False)
 
     def del_session(self, tophash):
         del self.file_sessions[tophash]

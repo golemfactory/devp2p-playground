@@ -28,7 +28,8 @@ def run(app_class, service_class, num_nodes=3, all_nodes=0, seed=0, min_peers=2,
     print(enode)
     bootstrap_nodes.append(enode)
 
-    services = [NodeDiscovery, PeerManager, service_class]
+    #services = [NodeDiscovery, PeerManager, service_class]
+    services = app_class.services
 
     # prepare config
     base_config = dict()
