@@ -21,7 +21,7 @@ class ChunkStream(io.BufferedIOBase):
         self.fh = fh
         self.base = base
         self.length = length
-        self.pos = 0
+        self.off = 0
 
     def _read(self, read_func, size):
         self.fh.seek(self.base + self.off)
@@ -40,14 +40,14 @@ class ChunkStream(io.BufferedIOBase):
 
     def write(self, data):
         self.fh.seek(self.base + self.off)
-        if len(data) > self.lenfth - self.off:
+        if len(data) > self.length - self.off:
             raise IndexError
         size = self.fh.write(data)
-        off += size
+        self.off += size
         return size
 
-    def flush():
-        super(ChunkStream, this).flush()
+    def flush(self):
+        super(ChunkStream, self).flush()
         self.fh.flush()
 
     def seek(offset, whence=0):
@@ -130,6 +130,8 @@ class HashedFile(object):
             multihash.Func.sha3_256).encode()
 
     def get_chunk_stream(self, chunk_no):
+        if chunk_no > len(self.hashes):
+            return None
         return ChunkStream(self.fh, self.chunk_size * chunk_no, self.chunk_size)
 
     def binary_metainfo(self):
@@ -148,7 +150,8 @@ class HashedFile(object):
             fname = '%s.part' % bytes_to_str(encode_hex(hf.tophash))
             if outdir:
                 fname = os.path.join(outdir, fname)
-            return cls(fh=open(fname, 'a+b'), hashes=hashes)
+            open(fname, 'a+b').close()
+            return cls(fh=open(fname, 'r+b'), hashes=hashes)
 
     @classmethod
     def from_binary_metainfo(cls, metainfo, outfh=None, outdir=None):
@@ -162,7 +165,7 @@ class HashedFile(object):
 if __name__ == '__main__':
     import sys
     hf = HashedFile.from_path(sys.argv[1])
-    hf.do_hash()
+    #hf.do_hash()
     #print(hf)
     for h in hf.hashes:
         print(bytes_to_str(h.encode('hex')))
