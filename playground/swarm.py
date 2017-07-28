@@ -194,27 +194,32 @@ class FileSwarmService(WiredService):
         theirs = bitmap_to_set(bitmap)
         sess.add_peer(proto, theirs)
 
-        self.log('received bitmap', tophash=encode_hex(tophash), bitmap=bitmap, ours=sess.pieces, theirs=theirs)
+        self.log('received bitmap', tophash=encode_hex(tophash), bitmap=bitmap,
+                                    ours=sess.pieces, theirs=theirs)
 
         self.recalc_interest(sess, proto)
 
     @receive_with_session
     def receive_interested(self, proto, sess, interested):
-        self.log('peer interested', proto=proto, sess=sess, tophash=encode_hex(sess.tophash), interested=interested)
+        self.log('peer interested', proto=proto, sess=sess, tophash=encode_hex(sess.tophash),
+                                    interested=interested)
         sess.peers[proto].interested = interested
         self.unchoke(sess, proto)
 
     @receive_with_session
     def receive_choke(self, proto, sess, choked):
 
-        self.log('peer (un)choking', proto=proto, tophash=encode_hex(sess.tophash), choked=choked)
+        self.log('peer (un)choking', proto=proto, tophash=encode_hex(sess.tophash),
+                                     choked=choked)
         sess.peers[proto].choking_us = choked
         if not choked:
             self.recalc_interest(sess, proto)
 
     @receive_with_session
     def receive_request(self, proto, sess, piece_no):
-        self.log('peer requested piece', proto=proto, tophash=encode_hex(sess.tophash), piece_no=piece_no, choked=sess.peers[proto].choked, my_pieces=sess.pieces)
+        self.log('peer requested piece', proto=proto, tophash=encode_hex(sess.tophash),
+                                         piece_no=piece_no, choked=sess.peers[proto].choked,
+                                         my_pieces=sess.pieces)
         if sess.peers[proto].choked:
             return
         if not piece_no in sess.pieces:
@@ -227,7 +232,8 @@ class FileSwarmService(WiredService):
 
     @receive_with_session
     def receive_have(self, proto, sess, piece_no):
-        self.log('peer got a piece', proto=proto, tophash=encode_hex(sess.tophash), piece_no=piece_no)
+        self.log('peer got a piece', proto=proto, tophash=encode_hex(sess.tophash),
+                                     piece_no=piece_no)
         sess.peers[proto].pieces.add(piece_no)
         self.recalc_interest(sess, proto)
 
@@ -236,7 +242,8 @@ class FileSwarmService(WiredService):
         h.update(data)
         mh = Multihash.from_hash(h)
 
-        self.log('received piece', proto=proto, mh=mh, requests=self.requests, mh_in=(mh in self.requests))
+        self.log('received piece', proto=proto, mh=mh, requests=self.requests,
+                                   mh_in=(mh in self.requests))
         if not self.requests.get(mh):
             return
         for (sess, piece_no) in self.requests[mh]:
@@ -286,7 +293,8 @@ class FileSwarmService(WiredService):
 
         if only_theirs and requests_left and not peer.choking_us:
             to_request = random.sample(only_theirs, requests_left)
-            self.log('will request', ours=sess.pieces, theirs=theirs, only_theirs=only_theirs, to_request=to_request)
+            self.log('will request', ours=sess.pieces, theirs=theirs, only_theirs=only_theirs,
+                                     to_request=to_request)
             for piece_no in to_request:
                 self.request(sess, proto, piece_no)
 
