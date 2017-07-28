@@ -204,7 +204,8 @@ class FileSwarmService(WiredService):
         self.log('peer interested', proto=proto, sess=sess, tophash=encode_hex(sess.tophash),
                                     interested=interested)
         sess.peers[proto].interested = interested
-        self.unchoke(sess, proto)
+        if interested:
+            self.unchoke(sess, proto)
 
     @receive_with_session
     def receive_choke(self, proto, sess, choked):
@@ -213,6 +214,11 @@ class FileSwarmService(WiredService):
                                      choked=choked)
         sess.peers[proto].choking_us = choked
         if not choked:
+            # re-send requests they ignored when they were choking us
+            # note: if we have received the piece in the meantime, it should've
+            #       been removed from all peers' requests by receive_piece
+            for piece_no in sess.peers[proto].requests:
+                proto.send_request(sess.tophash, piece_no)
             self.recalc_interest(sess, proto)
 
     @receive_with_session
@@ -283,13 +289,14 @@ class FileSwarmService(WiredService):
         theirs = peer.pieces
         only_theirs = theirs - sess.pieces
 
-        requests_left = self.max_requests_per_peer - len(peer.requests)
-        requests_left = min(requests_left, len(only_theirs))
-
         old_interest = peer.interesting_us
         peer.interesting_us = bool(only_theirs)
         if peer.interesting_us != old_interest:
             proto.send_interested(sess.tophash, peer.interesting_us)
+
+        only_theirs -= peer.requests
+        requests_left = max(self.max_requests_per_peer - len(peer.requests), 0)
+        requests_left = min(requests_left, len(only_theirs))
 
         if only_theirs and requests_left and not peer.choking_us:
             to_request = random.sample(only_theirs, requests_left)
