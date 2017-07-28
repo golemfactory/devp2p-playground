@@ -2,9 +2,10 @@ import math
 import random
 
 from multihash import Multihash
+import multihash
 
 import rlp
-from rlp.utils import encode_hex
+from rlp.utils import encode_hex, is_integer
 
 from devp2p.protocol import BaseProtocol
 from devp2p.service import WiredService, BaseService
@@ -51,6 +52,8 @@ class FileSwarmProtocol(BaseProtocol):
         structure = [
             ('tophash', rlp.sedes.binary),
             ('piece_no', rlp.sedes.big_endian_int),
+            ('offset', rlp.sedes.big_endian_int),
+            ('length', rlp.sedes.big_endian_int),
         ]
 
     class cancel(BaseProtocol.command):
@@ -58,11 +61,15 @@ class FileSwarmProtocol(BaseProtocol):
         structure = [
             ('tophash', rlp.sedes.binary),
             ('piece_no', rlp.sedes.big_endian_int),
+            ('offset', rlp.sedes.big_endian_int),
+            ('length', rlp.sedes.big_endian_int),
         ]
 
     class piece(BaseProtocol.command):
         cmd_id = 6
         structure = [
+            ('piecehash', rlp.sedes.binary),
+            ('offset', rlp.sedes.big_endian_int),
             ('data', rlp.sedes.binary),
         ]
 
@@ -92,7 +99,7 @@ class FileSessionPeer(object):
         self.interested = False
         self.choking_us = True
         self.interesting_us = False
-        self.requests = set()
+        self.requests = {}
 
 class FileSession(object):
     def __init__(self, hashed_file, piece_count=None):
@@ -132,6 +139,29 @@ class FileSession(object):
         fsp.pieces = pieces
         self.peers[peer] = fsp
 
+class PendingPiece(object):
+    def __init__(self, piece_hash, length, fh):
+        self.piece_hash = piece_hash
+        self.length = length
+        self.fh = fh
+        self.sessions = []
+        self.peers = set() # peers who have it
+        self.subpieces = {} # offset -> (len, done)
+
+    def pick_subpiece(self, include_pending=False):
+        #FIXME what about done subpieces?
+        next_off = 0
+        for off in sorted(self.subpieces):
+            if off > next_off:
+                break
+            if include_pending and not self.subpieces[off][1]:
+                break;
+            next_off += self.subpieces[off][0]
+
+        return next_off if next_off < self.length else None
+
+    def check_complete(self):
+        return self.pick_subpiece(include_pending=True) is None
 
 def receive_with_session(fun):
     def wrapper(self, proto, tophash, **kwargs):
@@ -149,6 +179,7 @@ class FileSwarmService(WiredService):
     default_config = {}
 
     max_requests_per_peer = 3
+    request_size = 2 ** 16
 
     wire_protocol = FileSwarmProtocol
 
@@ -156,7 +187,7 @@ class FileSwarmService(WiredService):
         super(FileSwarmService, self).__init__(app)
         self.file_sessions = {}
         self.peers = []
-        self.requests = {}
+        self.pending_pieces = {}
 
     def log(self, text, **kargs):
         self.app.services.playgroundservice.log(text, **kargs)
@@ -217,15 +248,16 @@ class FileSwarmService(WiredService):
             # re-send requests they ignored when they were choking us
             # note: if we have received the piece in the meantime, it should've
             #       been removed from all peers' requests by receive_piece
-            for piece_no in sess.peers[proto].requests:
-                proto.send_request(sess.tophash, piece_no)
+            for piece_no, (pp, reqs) in sess.peers[proto].requests.items():
+                for offset, length in reqs.items():
+                    proto.send_request(sess.tophash, piece_no, offset, sess.hf.chunk_size)
             self.recalc_interest(sess, proto)
 
     @receive_with_session
-    def receive_request(self, proto, sess, piece_no):
+    def receive_request(self, proto, sess, piece_no, offset, length):
         self.log('peer requested piece', proto=proto, tophash=encode_hex(sess.tophash),
                                          piece_no=piece_no, choked=sess.peers[proto].choked,
-                                         my_pieces=sess.pieces)
+                                         my_pieces=sess.pieces, offset=offset, length=length)
         if sess.peers[proto].choked:
             return
         if not piece_no in sess.pieces:
@@ -233,8 +265,9 @@ class FileSwarmService(WiredService):
 
         chunk = sess.hf.get_chunk_stream(piece_no)
         if chunk:
-            data = chunk.read(-1)
-            proto.send_piece(data)
+            chunk.seek(offset)
+            data = chunk.read(length)
+            proto.send_piece(sess.hf.hashes[piece_no].encode(), offset, data)
 
     @receive_with_session
     def receive_have(self, proto, sess, piece_no):
@@ -243,46 +276,84 @@ class FileSwarmService(WiredService):
         sess.peers[proto].pieces.add(piece_no)
         self.recalc_interest(sess, proto)
 
-    def receive_piece(self, proto, data):
-        h = HashedFile.hash_function()
-        h.update(data)
-        mh = Multihash.from_hash(h)
+    def receive_piece(self, proto, piecehash, offset, data):
+        assert isinstance(piecehash, bytes)
+        assert is_integer(offset)
+        assert isinstance(data, bytes)
 
-        self.log('received piece', proto=proto, mh=mh, requests=self.requests,
-                                   mh_in=(mh in self.requests))
-        if not self.requests.get(mh):
+        mh = multihash.decode(piecehash)
+
+        self.log('received piece', proto=proto, mh=mh, requests=self.pending_pieces,
+                                   mh_in=(mh in self.pending_pieces), offset=offset,
+                                   length=len(data))
+
+        pp = self.pending_pieces.get(mh)
+        length = len(data)
+        if not pp:
             return
-        for (sess, piece_no) in self.requests[mh]:
+        if not offset in pp.subpieces:
+            return
+        if pp.subpieces[offset][0] != length or pp.subpieces[offset][1]:
+            return
+        pp.subpieces[offset] = (length, True)
+        for (sess, piece_no) in pp.sessions:
             self.log('matched session', sess=sess, piece_no=piece_no)
             chunk = sess.hf.get_chunk_stream(piece_no)
+            chunk.seek(offset)
             chunk.write(data)
             self.log('written')
             chunk.flush()
-            sess.hf.haveset.add(piece_no) # FIXME: should do this closer to HashedFile
-            for peer in sess.peers.keys():
-                peer.send_have(sess.tophash, piece_no)
-                sess.peers[peer].requests.discard(piece_no)
-                # TODO: cancel the request?
-                self.recalc_interest(sess, peer)
 
-        self.requests[mh] = []
+            for peer in sess.peers.keys():
+                if piece_no in sess.peers[peer].requests:
+                    sess.peers[peer].requests[piece_no][1].pop(offset, None)
+                    # TODO: cancel the request?
+
+        if pp.check_complete():
+            self.complete_piece(pp)
+
+        for (sess, piece_no) in pp.sessions:
+            for peer in sess.peers.keys():
+                self.recalc_interest(sess, peer)
 
 
     # internal API
+
+    def complete_piece(self, piece):
+        self.pending_pieces.pop(piece.piece_hash, None)
+
+        if not piece.piece_hash.verify(piece.fh.read(-1)):
+            self.log('bad piece', piece=piece)
+            return
+
+        self.log('complete piece', piece_hash=piece.piece_hash)
+        for sess, piece_no in piece.sessions:
+            sess.hf.haveset.add(piece_no) # FIXME: should do this closer to HashedFile
+            for peer in sess.peers.keys():
+                peer.send_have(sess.tophash, piece_no)
+                sess.peers[peer].requests.pop(piece_no, None)
 
     def unchoke(self, sess, proto):
         sess.peers[proto].choked = False
         proto.send_choke(sess.tophash, False)
 
-    def request(self, sess, proto, piece_no):
+    def request(self, sess, proto, piece_no, offset=0, length=None):
+        if not length:
+            length = sess.hf.chunk_size
+
         piece_hash = sess.hf.hashes[piece_no]
-        if not piece_hash in self.requests:
-            self.requests[piece_hash] = []
-        self.requests[piece_hash].append((sess, piece_no))
+        if not piece_hash in self.pending_pieces:
+            self.pending_pieces[piece_hash] = PendingPiece(piece_hash, sess.hf.chunk_size, sess.hf.get_chunk_stream(piece_no))
+        pp = self.pending_pieces[piece_hash]
+        pp.sessions.append((sess, piece_no))
+        pp.peers.add(proto)
+        pp.subpieces[offset] = (length, False)
 
-        sess.peers[proto].requests.add(piece_no)
+        if not piece_no in sess.peers[proto].requests:
+            sess.peers[proto].requests[piece_no] = ((pp, {}))
+        sess.peers[proto].requests[piece_no][1][offset] = length
 
-        proto.send_request(sess.tophash, piece_no)
+        proto.send_request(sess.tophash, piece_no, offset, length)
 
     def recalc_interest(self, sess, proto):
         peer = sess.peers[proto]
@@ -294,16 +365,37 @@ class FileSwarmService(WiredService):
         if peer.interesting_us != old_interest:
             proto.send_interested(sess.tophash, peer.interesting_us)
 
-        only_theirs -= peer.requests
-        requests_left = max(self.max_requests_per_peer - len(peer.requests), 0)
+
+        requests_left = max(0, self.max_requests_per_peer - sum(len(reqs[1]) for reqs in peer.requests.values()))
+        if requests_left <= 0 or peer.choking_us:
+            return
+
+        # finish an existing piece
+        pending = {piece_no: sess.hf.hashes[piece_no] for piece_no in only_theirs if sess.hf.hashes[piece_no] in self.pending_pieces}
+        while pending and requests_left:
+            piece_no = random.choice(list(pending.keys()))
+            piece_hash = pending.pop(piece_no)
+            offset = self.pending_pieces[piece_hash].pick_subpiece()
+
+            while offset is not None and requests_left:
+                self.log('will request', piece_no=piece_no, offset=offset)
+                self.request(sess, proto, piece_no, offset, self.request_size)
+                requests_left -= 1
+                offset = self.pending_pieces[piece_hash].pick_subpiece()
+
+        # request a new piece
+
+        # FIXME: do we really want to start mutiple pieces?
+
+        only_theirs -= peer.requests.keys()
         requests_left = min(requests_left, len(only_theirs))
 
-        if only_theirs and requests_left and not peer.choking_us:
+        if only_theirs:
             to_request = random.sample(only_theirs, requests_left)
             self.log('will request', ours=sess.pieces, theirs=theirs, only_theirs=only_theirs,
                                      to_request=to_request)
             for piece_no in to_request:
-                self.request(sess, proto, piece_no)
+                self.request(sess, proto, piece_no, 0, self.request_size)
 
     # API
 
