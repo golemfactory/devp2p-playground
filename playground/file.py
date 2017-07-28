@@ -50,7 +50,7 @@ class ChunkStream(io.BufferedIOBase):
         super(ChunkStream, self).flush()
         self.fh.flush()
 
-    def seek(offset, whence=0):
+    def seek(self, offset, whence=0):
         assert whence in [0, 1, 2]
         if whence == 0:
             self.off = offset
