@@ -1,5 +1,6 @@
 import os.path
 import io
+import struct
 
 import hashlib
 import multihash
@@ -50,7 +51,7 @@ class ChunkStream(io.BufferedIOBase):
         super(ChunkStream, self).flush()
         self.fh.flush()
 
-    def seek(self, offset, whence=0):
+    def seek(self, offset, whence=io.SEEK_SET):
         assert whence in [0, 1, 2]
         if whence == 0:
             self.off = offset
@@ -64,11 +65,12 @@ class HashedFile(object):
     chunk_size = 2 ** 19
     hash_function = hashlib.blake2b
 
-    def __init__(self, fh=None, hashes=None, haveset=None):
+    def __init__(self, fh=None, hashes=None, haveset=None, length=None):
         self.fh = fh
         self.hashes = hashes
         self.tophash = None
         self.haveset = haveset
+        self.length = length
         if self.fh:
             if not self.hashes:
                 self._calc_hashes()
@@ -77,6 +79,8 @@ class HashedFile(object):
                 self._check_hashes()
         if self.hashes:
             self._calc_tophash()
+            if not self.length:
+                self.length = len(self.hashes) * self.chunk_size
 
     def _hash_chunk(self, chunk_no):
         #print(chunk_no)
@@ -111,7 +115,8 @@ class HashedFile(object):
             h = self._hash_chunk(i)
 
         self.hashes = hashes
-        self.fh.seek(0, 0)
+        self.length = self.fh.seek(0, io.SEEK_END)
+        self.fh.seek(0)
         #self._calc_tophash()
 
     def _check_hashes(self):
@@ -129,35 +134,46 @@ class HashedFile(object):
             self.binary_metainfo(),
             multihash.Func.sha3_256).encode()
 
+    def get_chunk_size(self, chunk_no):
+        if chunk_no > len(self.hashes):
+            return None
+        off = self.chunk_size * chunk_no
+        return min(self.chunk_size, self.length - off)
+
     def get_chunk_stream(self, chunk_no):
         if chunk_no > len(self.hashes):
             return None
-        return ChunkStream(self.fh, self.chunk_size * chunk_no, self.chunk_size)
+        off = self.chunk_size * chunk_no
+        return ChunkStream(self.fh, off, self.get_chunk_size(chunk_no))
 
     def binary_metainfo(self):
-        return b''.join(mh.encode(None) for mh in self.hashes)
+        log.debug('length', length=self.length)
+        return struct.pack('>Q', self.length or 0) + b''.join(mh.encode(None) for mh in self.hashes)
 
     @classmethod
     def from_path(cls, path):
         return cls(fh=open(path, 'rb'))
 
     @classmethod
-    def from_metainfo(cls, hashes, outfh=None, outdir=None):
+    def from_metainfo(cls, hashes, length=None, outfh=None, outdir=None):
         if outfh:
-            return cls(fh=outfh, hashes=hashes)
+            return cls(fh=outfh, hashes=hashes, length=length)
         if not outfh:
-            hf = cls(hashes=hashes)
+            hf = cls(hashes=hashes, length=length)
             fname = '%s.part' % bytes_to_str(encode_hex(hf.tophash))
             if outdir:
                 fname = os.path.join(outdir, fname)
             open(fname, 'a+b').close()
-            return cls(fh=open(fname, 'r+b'), hashes=hashes)
+            return cls(fh=open(fname, 'r+b'), hashes=hashes, length=length)
 
     @classmethod
     def from_binary_metainfo(cls, metainfo, outfh=None, outdir=None):
+        len_size = struct.calcsize('>Q')
+        length = struct.unpack('>Q', metainfo[:len_size])[0]
+        metainfo = metainfo[len_size:]
         count = int(len(metainfo) / 66)
         hashes = [multihash.decode(metainfo[(66 * i):(66 * (i+1))]) for i in range(count)]
-        return cls.from_metainfo(hashes, outfh, outdir)
+        return cls.from_metainfo(hashes, length, outfh, outdir)
 
     def __repr__(self):
         return "<%s(%r, %r)>" % (self.__class__.__name__, self.fh, self.hashes)

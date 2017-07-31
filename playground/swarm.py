@@ -120,6 +120,9 @@ class FileSession(object):
     def pieces(self):
         return self.hf.haveset
 
+    def piece_length(self, piece_no):
+        return self.hf.get_chunk_size(piece_no)
+
     @property
     def bitmap(self):
         bmap = []
@@ -144,7 +147,7 @@ class PendingPiece(object):
         self.piece_hash = piece_hash
         self.length = length
         self.fh = fh
-        self.sessions = []
+        self.sessions = set()
         self.peers = set() # peers who have it
         self.subpieces = {} # offset -> (len, done)
 
@@ -179,7 +182,7 @@ class FileSwarmService(WiredService):
     default_config = {}
 
     max_requests_per_peer = 3
-    request_size = 2 ** 16
+    request_size = 2 ** 14
 
     wire_protocol = FileSwarmProtocol
 
@@ -341,11 +344,13 @@ class FileSwarmService(WiredService):
         if not length:
             length = sess.hf.chunk_size
 
+        length = min(length, sess.piece_length(piece_no) - offset)
+
         piece_hash = sess.hf.hashes[piece_no]
         if not piece_hash in self.pending_pieces:
-            self.pending_pieces[piece_hash] = PendingPiece(piece_hash, sess.hf.chunk_size, sess.hf.get_chunk_stream(piece_no))
+            self.pending_pieces[piece_hash] = PendingPiece(piece_hash, sess.piece_length(piece_no), sess.hf.get_chunk_stream(piece_no))
         pp = self.pending_pieces[piece_hash]
-        pp.sessions.append((sess, piece_no))
+        pp.sessions.add((sess, piece_no))
         pp.peers.add(proto)
         pp.subpieces[offset] = (length, False)
 
