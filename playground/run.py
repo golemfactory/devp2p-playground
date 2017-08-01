@@ -11,6 +11,36 @@ from devp2p.utils import host_port_pubkey_to_uri, update_config_with_defaults
 
 from .app import PlaygroundApp, PlaygroundService
 
+from devp2p.utils import colors, COLOR_END
+
+def version_to_color(version_str):
+    return sum(map(ord, version_str)) - sum(map(ord, "NODE0"))
+
+def wrap_logger(logger, app):
+    def transform_args(text, **kargs):
+        version_string = app.config['client_version_string']
+        msg = ' '.join([
+            colors[version_to_color(version_string) % len(colors)],
+            version_string,
+            text,
+            (' %r' % kargs if kargs else ''),
+            COLOR_END])
+        return msg
+
+    class LogWrapper(object):
+        def __getattr__(self, name):
+            fun = getattr(logger, name)
+            if name in ['debug', 'info', 'warn', 'warning', 'error', 'critical']:
+                def newfun(msg, *args, **kargs):
+                    return fun(transform_args(msg, **kargs), *args)
+                return newfun
+            if name in ['log']:
+                def newfun(lvl, msg, *args, **kargs):
+                    return fun(lvl, transform_args(msg, **kargs), *args)
+                return newfun
+            return fun
+    return LogWrapper()
+
 def run(app_class, service_class, num_nodes=3, all_nodes=0, seed=0, min_peers=2, max_peers=2, random_port=False, bootstrap_nodes=[]):
     gevent.get_hub().SYSTEM_ERROR = BaseException
     if random_port:
@@ -42,6 +72,7 @@ def run(app_class, service_class, num_nodes=3, all_nodes=0, seed=0, min_peers=2,
     base_config['num_nodes'] = all_nodes
     base_config['min_peers'] = min_peers
     base_config['max_peers'] = max_peers
+    base_config['log_wrapper'] = wrap_logger
 
     # prepare apps
     apps = []

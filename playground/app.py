@@ -22,9 +22,9 @@ from devp2p.service import WiredService, BaseService
 from devp2p.utils import colors, COLOR_END, big_endian_to_int
 from devp2p import app_helper
 
-from .tcpconsole import startConsole
 from .swarm import FileSwarmService, FileSession
 from .file import HashedFile
+from .consvc import Console
 
 try:
     import ethereum.slogging as slogging
@@ -126,7 +126,6 @@ class PlaygroundService(WiredService):
         super(PlaygroundService, self).__init__(app)
 
     def start(self):
-        self._start_console()
         super(PlaygroundService, self).start()
 
     def log(self, text, **kargs):
@@ -230,26 +229,6 @@ class PlaygroundService(WiredService):
         del self.files_out[target_pubkey, name]
         return False
 
-    def _start_console(self):
-        def on_connect(address, reply):
-            self.chat_handlers.append(reply)
-        def on_cmd(msg, address, reply):
-            if msg.startswith('/'):
-                msplit = msg.split(' ', 1)
-                msplit.append('')
-                cmd, args = msplit[:2]
-                cmd = 'cmd_' + cmd[1:]
-                if hasattr(self, cmd) and getattr(self, cmd):
-                    getattr(self, cmd)(args, reply)
-                else:
-                    reply("No such command %s" % cmd)
-            else:
-                self.send_chat(msg)
-
-        cons_port = self.config['p2p']['listen_port'] - 100
-        self.log('starting console', port=cons_port)
-        startConsole(cons_port, on_connect, on_cmd)
-        self.log('started console', port=cons_port)
 
     def cmd_msg(self, args, reply):
         asplit = args.split(' ', 1)
@@ -326,8 +305,7 @@ class PlaygroundService(WiredService):
         if not self.ts_filter.check(chatmsg.ts):
             return
 
-        for h in self.chat_handlers:
-            h("{0:%H:%M:%S} <{1}> {2}".format(
+        self.app.services.console.print("{0:%H:%M:%S} <{1}> {2}".format(
                     datetime.datetime.fromtimestamp(chatmsg.ts / 1000),
                     sender,
                     chatmsg.content_str,
@@ -391,7 +369,7 @@ class PlaygroundApp(BaseApp):
     default_config['client_version_string'] = client_version_string
     default_config['post_app_start_callback'] = None
 
-    services = [NodeDiscovery, PeerManager, PlaygroundService, FileSwarmService]
+    services = [NodeDiscovery, PeerManager, PlaygroundService, FileSwarmService, Console]
     #services = [NodeDiscovery, PeerManager, PlaygroundService]
 
     def __init__(self, config=default_config):
@@ -401,6 +379,18 @@ class PlaygroundApp(BaseApp):
         #    if service.name not in self.services:
         #        service.register_with_app(self)
         #    assert service.name in self.services
+
+    def cmd_chat(self, args, reply):
+        self.services.playgroundservice.send_chat(args)
+
+    def cmd_msg(self, args, reply):
+        self.services.playgroundservice.cmd_msg(args, reply)
+
+    def cmd_file(self, args, reply):
+        self.services.playgroundservice.cmd_file(args, reply)
+
+    def cmd_seed(self, args, reply):
+        self.services.playgroundservice.cmd_seed(args, reply)
 
 if __name__ == '__main__':
     #app_helper.run(PlaygroundApp, PlaygroundService, num_nodes=2, max_peers=1, min_peers=1)

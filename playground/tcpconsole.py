@@ -1,6 +1,6 @@
 from gevent.server import StreamServer
 
-def startConsole(port, connectHandler, commandHandler):
+def startConsole(port, connectHandler, commandHandler, host='127.0.0.1'):
     def handle(socket, address):
         def reply(msg):
             try:
@@ -21,5 +21,5 @@ def startConsole(port, connectHandler, commandHandler):
 
         rfile.close()
 
-    server = StreamServer(('127.0.0.1', port), handle)
+    server = StreamServer((host, port), handle)
     server.start()
