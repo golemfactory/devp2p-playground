@@ -9,6 +9,11 @@ from rlp.utils import bytes_to_str, encode_hex
 from devp2p import slogging
 
 try:
+    from hashlib import blake2b
+except:
+    from pyblake2 import blake2b
+
+try:
     import ethereum.slogging as slogging
     slogging.configure(config_string=':debug,p2p.discovery:info')
     #slogging.configure(config_string=':debug,p2p:info')
@@ -63,7 +68,7 @@ class ChunkStream(io.BufferedIOBase):
 
 class HashedFile(object):
     chunk_size = 2 ** 19
-    hash_function = hashlib.blake2b
+    hash_function = blake2b
 
     def __init__(self, fh=None, hashes=None, haveset=None, length=None):
         self.fh = fh
