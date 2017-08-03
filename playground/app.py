@@ -380,6 +380,7 @@ class PlaygroundApp(BaseApp):
     #services = [NodeDiscovery, PeerManager, PlaygroundService]
 
     def __init__(self, config=default_config):
+        config['fileswarm']['choking_strategy'] = PerSessionTitForTatChokingStrategy
         super(PlaygroundApp, self).__init__(config)
         #for service in PlaygroundApp.services:
         #    assert issubclass(service, BaseService)

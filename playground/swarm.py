@@ -6,6 +6,8 @@ import weakref
 from multihash import Multihash
 import multihash
 
+import gevent
+
 import rlp
 from rlp.utils import encode_hex, is_integer
 
@@ -206,9 +208,91 @@ def receive_with_session(fun):
         fun(self, proto, sess, **kwargs)
     return wrapper
 
+class ChokingStrategy(object):
+    def __init__(self, service):
+        self.service = service
+
+    def start(self):
+        pass
+    def stop(self):
+        pass
+    def peer_interested(self, sess, proto):
+        pass
+
+class NaiveChokingStrategy(ChokingStrategy):
+    def peer_interested(self, sess, proto):
+        if sess.peers[proto].interested:
+            self.service.unchoke(sess, proto)
+
+class PerSessionTitForTatChokingStrategy(ChokingStrategy):
+    regular_unchoke_cnt = 3
+    optimistic_unchoke_cnt = 1
+    period = 10
+    optimistic_period_count = 3
+
+    def __init__(self, service):
+        super(PerSessionTitForTatChokingStrategy, self).__init__(service)
+        self.is_stopped = False
+        self.optimistic_lifetime = 0
+
+    def _rechoke_session(self, sess):
+        def key_up(peer):
+            return peer.rate_up
+        def key_down(peer):
+            return peer.rate_down
+
+        key = key_up if sess.complete else key_down
+
+        for peer in sess.peers.values():
+            peer.calc_rates()
+        unchokes = sorted(sess.peers.values(), key=key, reverse=True)[:self.regular_unchoke_cnt]
+        unchokes = set(map(lambda peer: peer.peer, unchokes))
+        chokes = set(sess.peers.keys()) - unchokes
+
+        if self.optimistic_lifetime:
+            self.optimistic_lifetime -= 1
+        else:
+            self.optimistic_unchokes = set()
+            choke_list = list(chokes)
+            while choke_list and len(self.optimistic_unchokes) < self.optimistic_unchoke_cnt:
+                optimistic_peer = random.choice(choke_list)
+                self.optimistic_unchokes.add(optimistic_peer)
+                choke_list.remove(optimistic_peer)
+                chokes.discard(optimistic_peer)
+            self.optimistic_lifetime = self.optimistic_period_count
+
+        unchokes |= self.optimistic_unchokes
+        self.service.log('will unchoke', unchokes=unchokes)
+
+        for proto in sess.peers:
+            if proto in unchokes:
+                self.service.unchoke(sess, proto)
+            else:
+                self.service.choke(sess, proto)
+
+    def _rechoke_loop(self):
+        while not self.is_stopped:
+            for sess in self.service.file_sessions.values():
+                self._rechoke_session(sess)
+            gevent.sleep(self.period)
+
+    def start(self):
+        self.greenlet = gevent.spawn(self._rechoke_loop)
+
+    def stop(self):
+        if self.is_stopped:
+            return
+        self.is_stopped = True
+        try:
+           self.greenlet.kill()
+        except gevent.GreenletExit:
+            pass
+
 class FileSwarmService(WiredService):
     name = 'fileswarm'
-    default_config = {}
+    default_config = {
+        'fileswarm': {'choking_strategy': NaiveChokingStrategy}
+    }
 
     max_requests_per_peer = 3
     request_size = 2 ** 14
@@ -220,9 +304,19 @@ class FileSwarmService(WiredService):
         self.file_sessions = {}
         self.peers = []
         self.pending_pieces = {}
+        choking_strategy = self.config['fileswarm']['choking_strategy']
+        self.choking_strategy = choking_strategy(self)
 
     def log(self, text, **kargs):
         self.app.services.playgroundservice.log(text, **kargs)
+
+    def start(self):
+        super(FileSwarmService, self).start()
+        self.choking_strategy.start()
+
+    def stop(self):
+        self.choking_strategy.stop()
+        super(FileSwarmService, self).stop()
 
     def on_wire_protocol_start(self, proto):
         assert isinstance(proto, self.wire_protocol)
@@ -273,8 +367,7 @@ class FileSwarmService(WiredService):
         self.log('peer interested', proto=proto, sess=sess, tophash=encode_hex(sess.tophash),
                                     interested=interested)
         sess.peers[proto].interested = interested
-        if interested:
-            self.unchoke(sess, proto)
+        self.choking_strategy.peer_interested(sess, proto)
 
     @receive_with_session
     def receive_choke(self, proto, sess, choked):
