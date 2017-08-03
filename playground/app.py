@@ -3,6 +3,8 @@ import time
 import random
 import datetime
 import asyncio
+import io
+import traceback
 
 import gevent
 from gevent.event import AsyncResult
@@ -266,15 +268,18 @@ class PlaygroundService(WiredService):
         reply('sent file: %s' % ret)
 
     def cmd_seed(self, args, reply):
-        filename = str_to_bytes(args)
-        f_raw = open(filename, 'rb')
-        f = FileObjectThread(f_raw, 'rb')
-        hf = HashedFile(fh=f)
-        reply(encode_hex(hf.tophash))
-        fs = FileSession(hf)
-        #TODO: add the content
-        self.app.services.fileswarm.add_session(fs)
-        self.broadcast('file_metainfo', hf.binary_metainfo())
+        try:
+            filename = str_to_bytes(args)
+            f = open(filename, 'rb')
+            f = FileObjectThread(f, 'rb')
+            f = io.BufferedReader(f)
+            hf = HashedFile(fh=f)
+            reply(encode_hex(hf.tophash))
+            fs = FileSession(hf)
+            self.app.services.fileswarm.add_session(fs)
+            self.broadcast('file_metainfo', hf.binary_metainfo())
+        except FileNotFoundError:
+            reply(traceback.format_exc())
 
     def on_wire_protocol_start(self, proto):
         self.log('--------------------------------')
