@@ -1,5 +1,7 @@
 import math
 import random
+import time
+import weakref
 
 from multihash import Multihash
 import multihash
@@ -110,7 +112,7 @@ class FileSession(object):
             raise ValueError("No piece count")
         self.piece_count = piece_count
         #self.pieces = set()
-        self.peers = {}
+        self.peers = weakref.WeakKeyDictionary()
 
     @property
     def tophash(self):
@@ -148,7 +150,7 @@ class PendingPiece(object):
         self.length = length
         self.fh = fh
         self.sessions = set()
-        self.peers = set() # peers who have it
+        self.peers = weakref.WeakSet() # peers who have it
         self.subpieces = {} # offset -> (len, done)
 
     def pick_subpiece(self, include_pending=False):
@@ -204,6 +206,12 @@ class FileSwarmService(WiredService):
         for sess in self.file_sessions.values():
             self.log("send_bitmap", sess=sess)
             proto.send_bitmap(sess.tophash, sess.bitmap, False)
+
+    def on_wire_protocol_stop(self, proto):
+        self.log('bye', peer=proto)
+        self.peers.remove(proto)
+        for sess in self.file_sessions:
+            sess.pop(proto, None)
 
     def _setup_handlers(self, proto):
         proto.receive_bitmap_callbacks.append(self.receive_bitmap)
@@ -316,7 +324,7 @@ class FileSwarmService(WiredService):
             self.complete_piece(pp)
 
         for (sess, piece_no) in pp.sessions:
-            for peer in sess.peers.keys():
+            for peer in list(sess.peers.keys()):
                 self.recalc_interest(sess, peer)
 
 
