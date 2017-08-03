@@ -332,7 +332,7 @@ class FileSwarmService(WiredService):
         self.log('bye', peer=proto)
         self.peers.remove(proto)
         for sess in self.file_sessions:
-            sess.pop(proto, None)
+            sess.peers.pop(proto, None)
 
     def _setup_handlers(self, proto):
         proto.receive_bitmap_callbacks.append(self.receive_bitmap)

@@ -24,7 +24,7 @@ from devp2p.service import WiredService, BaseService
 from devp2p.utils import colors, COLOR_END, big_endian_to_int
 from devp2p import app_helper
 
-from .swarm import FileSwarmService, FileSession
+from .swarm import FileSwarmService, FileSession, PerSessionTitForTatChokingStrategy
 from .file import HashedFile
 from .consvc import Console
 
