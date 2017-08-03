@@ -392,6 +392,12 @@ class PlaygroundApp(BaseApp):
     def cmd_seed(self, args, reply):
         self.services.playgroundservice.cmd_seed(args, reply)
 
+    def cmd_rates(self, args, reply):
+        for sess in self.services.fileswarm.file_sessions.values():
+            for proto, peer in sess.peers.items():
+                peer.calc_rates()
+                reply('rates up: %f down: %f to %s' % (peer.rate_up, peer.rate_down, proto))
+
 if __name__ == '__main__':
     #app_helper.run(PlaygroundApp, PlaygroundService, num_nodes=2, max_peers=1, min_peers=1)
     app_helper.run(PlaygroundApp, PlaygroundService)

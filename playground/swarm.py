@@ -93,7 +93,21 @@ def bitmap_to_set(bmap):
                 s.add(i * 8 + j)
     return s
 
+def _calc_rate(queue, period):
+    now = time.time()
+    deadline = now - period
+
+    # Get rid of anything older than period
+    while queue and queue[0][0] < deadline:
+        queue.pop(0)
+
+    # Calc average of the rest
+    total = sum(x[1] for x in queue)
+    return total / period
+
 class FileSessionPeer(object):
+    rate_avg_period = 20
+
     def __init__(self, peer):
         self.peer = peer
         self.pieces = set()
@@ -102,6 +116,12 @@ class FileSessionPeer(object):
         self.choking_us = True
         self.interesting_us = False
         self.requests = {}
+        self.sent = []
+        self.recvd = []
+
+    def calc_rates(self):
+        self.rate_up = _calc_rate(self.sent, self.rate_avg_period)
+        self.rate_down = _calc_rate(self.recvd, self.rate_avg_period)
 
 class FileSession(object):
     def __init__(self, hashed_file, piece_count=None):
@@ -278,6 +298,7 @@ class FileSwarmService(WiredService):
         if chunk:
             chunk.seek(offset)
             data = chunk.read(length)
+            sess.peers[proto].sent.append((time.time(), length))
             proto.send_piece(sess.hf.hashes[piece_no].encode(), offset, data)
 
     @receive_with_session
@@ -293,13 +314,14 @@ class FileSwarmService(WiredService):
         assert isinstance(data, bytes)
 
         mh = multihash.decode(piecehash)
+        length = len(data)
 
+        now = time.time()
         self.log('received piece', proto=proto, mh=mh, requests=self.pending_pieces,
                                    mh_in=(mh in self.pending_pieces), offset=offset,
-                                   length=len(data))
+                                   length=length)
 
         pp = self.pending_pieces.get(mh)
-        length = len(data)
         if not pp:
             return
         if not offset in pp.subpieces:
@@ -309,6 +331,7 @@ class FileSwarmService(WiredService):
         pp.subpieces[offset] = (length, True)
         for (sess, piece_no) in pp.sessions:
             self.log('matched session', sess=sess, piece_no=piece_no)
+            sess.peers[proto].recvd.append((now, length))
             chunk = sess.hf.get_chunk_stream(piece_no)
             chunk.seek(offset)
             chunk.write(data)
