@@ -159,10 +159,17 @@ class FileSession(object):
             bmap.append(x)
         return bytes(bmap)
 
+    @property
+    def complete(self):
+        return len(self.pieces) == self.piece_count
+
     def add_peer(self, peer, pieces):
+        if peer in self.peers:
+            return False
         fsp = FileSessionPeer(peer)
         fsp.pieces = pieces
         self.peers[peer] = fsp
+        return True
 
 class PendingPiece(object):
     def __init__(self, piece_hash, length, fh):
@@ -366,10 +373,20 @@ class FileSwarmService(WiredService):
             for peer in sess.peers.keys():
                 peer.send_have(sess.tophash, piece_no)
                 sess.peers[peer].requests.pop(piece_no, None)
+            if sess.complete:
+                self.log('session completed', sess=sess)
 
     def unchoke(self, sess, proto):
+        if not sess.peers[proto].choked:
+            return
         sess.peers[proto].choked = False
         proto.send_choke(sess.tophash, False)
+
+    def choke(self, sess, proto):
+        if sess.peers[proto].choked:
+            return
+        sess.peers[proto].choked = True
+        proto.send_choke(sess.tophash, True)
 
     def request(self, sess, proto, piece_no, offset=0, length=None):
         if not length:
@@ -436,9 +453,12 @@ class FileSwarmService(WiredService):
     # API
 
     def add_session(self, session):
+        if session.tophash in self.file_sessions:
+            return False
         self.file_sessions[session.tophash] = session
         for peer in self.peers:
             peer.send_bitmap(session.tophash, session.bitmap, False)
+        return True
 
     def del_session(self, tophash):
         del self.file_sessions[tophash]

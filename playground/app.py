@@ -362,7 +362,9 @@ class PlaygroundService(WiredService):
         #tophash = multihash.digest(data, multihash.Func.sha3_256).encode(None)
         self.log("receiving metainfo", tophash=hf.tophash)
         fs = FileSession(hf)
-        self.app.services.fileswarm.add_session(fs)
+        if self.app.services.fileswarm.add_session(fs):
+            self.app.services.console.print('new metainfo %s' % encode_hex(hf.tophash))
+            self.broadcast('file_metainfo', data)
 
 class PlaygroundApp(BaseApp):
     client_name = 'playground'
