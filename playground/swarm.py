@@ -238,12 +238,20 @@ class PerSessionTitForTatChokingStrategy(ChokingStrategy):
     period = 10
     optimistic_period_count = 3
 
+    class SessionState(object):
+        def __init__(self):
+            self.optimistic_lifetime = 0
+
     def __init__(self, service):
         super(PerSessionTitForTatChokingStrategy, self).__init__(service)
         self.is_stopped = False
-        self.optimistic_lifetime = 0
+        self.sessions = {}
 
     def _rechoke_session(self, sess):
+        if not sess.tophash in self.sessions:
+            self.sessions[sess.tophash] = self.SessionState()
+        state = self.sessions[sess.tophash]
+
         def key_up(peer):
             return peer.rate_up
         def key_down(peer):
@@ -261,18 +269,18 @@ class PerSessionTitForTatChokingStrategy(ChokingStrategy):
         chokes = interested_peers - unchokes
         choke_list = list(chokes)
 
-        if not self.optimistic_lifetime:
-            self.optimistic_unchokes = set()
-            while choke_list and len(unchokes) + len(self.optimistic_unchokes) < self.total_unchoke_cnt:
+        if not state.optimistic_lifetime:
+            state.optimistic_unchokes = set()
+            while choke_list and len(unchokes) + len(state.optimistic_unchokes) < self.total_unchoke_cnt:
                 optimistic_peer = random.choice(choke_list)
-                self.optimistic_unchokes.add(optimistic_peer)
+                state.optimistic_unchokes.add(optimistic_peer)
                 choke_list.remove(optimistic_peer)
-            self.optimistic_lifetime = self.optimistic_period_count
+            state.optimistic_lifetime = self.optimistic_period_count
 
-        self.optimistic_lifetime -= 1
+        state.optimistic_lifetime -= 1
 
-        unchokes |= self.optimistic_unchokes
-        chokes -= self.optimistic_unchokes
+        unchokes |= state.optimistic_unchokes
+        chokes -= state.optimistic_unchokes
         unchokes = {p.peer for p in unchokes}
         chokes = {p.peer for p in chokes}
         self.service.log('will unchoke', unchokes=unchokes, chokes=chokes, uninterested={p.peer for p in (set(sess.peers.values()) - interested_peers)})
