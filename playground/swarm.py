@@ -120,10 +120,15 @@ class FileSessionPeer(object):
         self.requests = {}
         self.sent = []
         self.recvd = []
+        self.rate_up = 0
+        self.rate_down = 0
 
     def calc_rates(self):
         self.rate_up = _calc_rate(self.sent, self.rate_avg_period)
         self.rate_down = _calc_rate(self.recvd, self.rate_avg_period)
+
+    def __repr__(self):
+        return '<%s(peer=%r up=%s down=%s)>' % (self.__class__.__name__, self.peer, self.rate_up, self.rate_down)
 
 class FileSession(object):
     def __init__(self, hashed_file, piece_count=None):
@@ -196,6 +201,9 @@ class PendingPiece(object):
 
     def check_complete(self):
         return self.pick_subpiece(include_pending=True) is None
+
+    def __repr__(self):
+        return '<%s(len=%d, hash=%s, subpieces=%s)>' % (self.__class__.__name__, self.length, self.piece_hash, self.subpieces)
 
 def receive_with_session(fun):
     def wrapper(self, proto, tophash, **kwargs):
