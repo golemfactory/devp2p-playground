@@ -234,7 +234,7 @@ class NaiveChokingStrategy(ChokingStrategy):
 
 class PerSessionTitForTatChokingStrategy(ChokingStrategy):
     regular_unchoke_cnt = 3
-    optimistic_unchoke_cnt = 1
+    total_unchoke_cnt = 4
     period = 10
     optimistic_period_count = 3
 
@@ -253,24 +253,29 @@ class PerSessionTitForTatChokingStrategy(ChokingStrategy):
 
         for peer in sess.peers.values():
             peer.calc_rates()
-        unchokes = sorted(sess.peers.values(), key=key, reverse=True)[:self.regular_unchoke_cnt]
-        unchokes = set(map(lambda peer: peer.peer, unchokes))
-        chokes = set(sess.peers.keys()) - unchokes
 
-        if self.optimistic_lifetime:
-            self.optimistic_lifetime -= 1
-        else:
+        interested_peers = {p for p in sess.peers.values() if p.interested}
+        sorted_peers = sorted(interested_peers, key=key, reverse=True)
+        self.service.log('sorted peers', peers=sorted_peers)
+        unchokes = set(sorted_peers[:self.regular_unchoke_cnt])
+        chokes = interested_peers - unchokes
+        choke_list = list(chokes)
+
+        if not self.optimistic_lifetime:
             self.optimistic_unchokes = set()
-            choke_list = list(chokes)
-            while choke_list and len(self.optimistic_unchokes) < self.optimistic_unchoke_cnt:
+            while choke_list and len(unchokes) + len(self.optimistic_unchokes) < self.total_unchoke_cnt:
                 optimistic_peer = random.choice(choke_list)
                 self.optimistic_unchokes.add(optimistic_peer)
                 choke_list.remove(optimistic_peer)
-                chokes.discard(optimistic_peer)
             self.optimistic_lifetime = self.optimistic_period_count
 
+        self.optimistic_lifetime -= 1
+
         unchokes |= self.optimistic_unchokes
-        self.service.log('will unchoke', unchokes=unchokes)
+        chokes -= self.optimistic_unchokes
+        unchokes = {p.peer for p in unchokes}
+        chokes = {p.peer for p in chokes}
+        self.service.log('will unchoke', unchokes=unchokes, chokes=chokes, uninterested={p.peer for p in (set(sess.peers.values()) - interested_peers)})
 
         for proto in sess.peers:
             if proto in unchokes:
