@@ -381,7 +381,7 @@ class FileSwarmService(WiredService):
             #       been removed from all peers' requests by receive_piece
             for piece_no, (pp, reqs) in sess.peers[proto].requests.items():
                 for offset, length in reqs.items():
-                    proto.send_request(sess.tophash, piece_no, offset, sess.hf.chunk_size)
+                    proto.send_request(sess.tophash, piece_no, offset, length)
             self.recalc_interest(sess, proto)
 
     @receive_with_session
