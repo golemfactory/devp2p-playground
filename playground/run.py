@@ -41,7 +41,7 @@ def wrap_logger(logger, app):
             return fun
     return LogWrapper()
 
-def run(app_class, service_class, num_nodes=3, all_nodes=0, seed=0, min_peers=2, max_peers=2, random_port=False, bootstrap_nodes=[]):
+def run(app_class, service_class, num_nodes=3, start_num=0, all_nodes=0, seed=0, min_peers=2, max_peers=2, random_port=False, bootstrap_nodes=None):
     gevent.get_hub().SYSTEM_ERROR = BaseException
     if random_port:
         base_port = random.randint(10000, 60000)
@@ -51,6 +51,8 @@ def run(app_class, service_class, num_nodes=3, all_nodes=0, seed=0, min_peers=2,
     if not all_nodes:
         all_nodes = num_nodes
 
+    if not bootstrap_nodes:
+        bootstrap_nodes = []
     # get bootstrap node (node0) enode
     bootstrap_node_privkey = mk_privkey('%d:udp:%d' % (seed, 0))
     bootstrap_node_pubkey = privtopub_raw(bootstrap_node_privkey)
@@ -76,7 +78,7 @@ def run(app_class, service_class, num_nodes=3, all_nodes=0, seed=0, min_peers=2,
 
     # prepare apps
     apps = []
-    for node_num in range(num_nodes):
+    for node_num in range(start_num, start_num+num_nodes):
         app = create_app(node_num, base_config, services, app_class)
         apps.append(app)
 
