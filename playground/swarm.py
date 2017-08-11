@@ -82,7 +82,7 @@ class FileSwarmProtocol(BaseProtocol):
 
 def set_to_bitmap(s, length=None):
     if not length:
-        length = log2(max(s))
+        length = math.log2(max(s))
     bmap = bytes(math.ceil(length / 8))
     for x in s:
         byte = x / 8
@@ -137,8 +137,8 @@ class FileSessionPeer(object):
 
 
     def get_rerequests(self):
-        return [(piece_no, offset, length) for offset, length in reqs.items()
-                            for piece_no, (pp, reqs) in self.requests.items()]
+        return [(piece_no, offset, length) for piece_no, (_, reqs) in self.requests.items()
+                                                         for offset, length in reqs.items()]
 
 
     @property
@@ -205,6 +205,7 @@ class FileSession(object):
 
 
     def receive_subpiece(self, recv_time, proto, piece_no, offset, data):
+        length = len(data)
         self.peers[proto].recvd.append((recv_time, length))
         chunk = self.piece_stream(piece_no)
         chunk.seek(offset)
@@ -216,10 +217,10 @@ class FileSession(object):
                 peer.requests[piece_no][1].pop(offset, None)
 
 
-    def add_request(self, proto, piece_no, offset, length):
+    def add_request(self, proto, piece_no, pending_piece, offset, length):
         if not piece_no in self.peers[proto].requests:
-            self.peers[proto].requests[piece_no] = ((pp, {}))
-        sess.peers[proto].requests[piece_no][1][offset] = length
+            self.peers[proto].requests[piece_no] = ((pending_piece, {}))
+        self.peers[proto].requests[piece_no][1][offset] = length
 
 
     def send_subpiece(self, send_time, proto, piece_no, offset, length):
@@ -264,7 +265,7 @@ class PendingPiece(object):
 
 
     def add_request(self, session, piece_no, peer_proto, offset, length):
-        self.sessions.add((sess, piece_no))
+        self.sessions.add((session, piece_no))
         #self.peers.add(peer_proto)
         self.subpieces[offset] = (length, False)
 
@@ -307,7 +308,7 @@ class PendingPiece(object):
     @classmethod
     def from_session(cls, log, session, piece_no):
         return cls(log, session.piece_hash(piece_no), session.piece_length(piece_no),
-                   session.piece_streaM(piece_no))
+                   session.piece_stream(piece_no))
 
 def receive_with_session(fun):
 
@@ -420,7 +421,7 @@ class PerSessionTitForTatChokingStrategy(ChokingStrategy):
             return
         self.is_stopped = True
         try:
-           self.greenlet.kill()
+            self.greenlet.kill()
         except gevent.GreenletExit:
             pass
 
@@ -542,7 +543,7 @@ class FileSwarmService(WiredService):
         if not piece_no in sess.pieces:
             return
 
-        data = sess.send_subpiece(piece_no, time.time(), proto, piece_no, ofset, length)
+        data = sess.send_subpiece(time.time(), proto, piece_no, offset, length)
         if data:
             proto.send_piece(sess.piece_hash(piece_no).encode(), offset, data)
 
@@ -577,7 +578,7 @@ class FileSwarmService(WiredService):
             return
         for (sess, piece_no) in sessions:
             self.log('matched session', sess=sess, piece_no=piece_no)
-            sess.recieve_subpiece(now, proto, piece_no, offset, data)
+            sess.receive_subpiece(now, proto, piece_no, offset, data)
 
         if pp.check_complete():
             self.complete_piece(pp)
@@ -631,7 +632,7 @@ class FileSwarmService(WiredService):
         pp = self.pending_pieces[piece_hash]
         pp.add_request(sess, piece_no, proto, offset, length)
 
-        sess.add_request(proto, piece_no, offset, length)
+        sess.add_request(proto, piece_no, pp, offset, length)
 
         proto.send_request(sess.tophash, piece_no, offset, length)
 
@@ -646,7 +647,7 @@ class FileSwarmService(WiredService):
         if peer.interesting_us != old_interest:
             proto.send_interested(sess.tophash, peer.interesting_us)
 
-        requests_left = max(0, self.max_requests_per_peer - peer.req_count())
+        requests_left = max(0, self.max_requests_per_peer - peer.req_count)
         if requests_left <= 0 or peer.choking_us:
             return
 
