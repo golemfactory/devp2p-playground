@@ -136,6 +136,21 @@ class FileSessionPeer(object):
         self.rate_down = _calc_rate(self.recvd, self.rate_avg_period)
 
 
+    def add_request(self, piece_no, pending_piece, offset, length):
+        if not piece_no in self.requests:
+            self.requests[piece_no] = ((pending_piece, {}))
+        self.requests[piece_no][1][offset] = length
+
+
+    def del_request(self, piece_no, offset):
+        if piece_no in self.requests:
+            self.requests[piece_no][1].pop(offset, None)
+
+
+    def del_piece_requests(self, piece_no):
+        self.requests.pop(piece_no, None)
+
+
     def get_rerequests(self):
         return [(piece_no, offset, length) for piece_no, (_, reqs) in self.requests.items()
                                                          for offset, length in reqs.items()]
@@ -213,14 +228,11 @@ class FileSession(object):
         chunk.flush()
 
         for peer in self.peers.values():
-            if piece_no in peer.requests:
-                peer.requests[piece_no][1].pop(offset, None)
+            peer.del_request(piece_no, offset)
 
 
     def add_request(self, proto, piece_no, pending_piece, offset, length):
-        if not piece_no in self.peers[proto].requests:
-            self.peers[proto].requests[piece_no] = ((pending_piece, {}))
-        self.peers[proto].requests[piece_no][1][offset] = length
+        self.peers[proto].add_request(piece_no, pending_piece, offset, length)
 
 
     def send_subpiece(self, send_time, proto, piece_no, offset, length):
@@ -236,7 +248,7 @@ class FileSession(object):
     def complete_piece(self, piece_no):
         self.hf.haveset.add(piece_no)
         for peer in self.peers.values():
-            peer.requests.pop(piece_no, None)
+            peer.del_piece_requests(piece_no)
 
 
     def add_peer(self, peer, pieces):
@@ -665,8 +677,7 @@ class FileSwarmService(WiredService):
                 offset = self.pending_pieces[piece_hash].pick_subpiece()
 
         # request a new piece
-
-        # FIXME: do we really want to start mutiple pieces?
+        # FIXME: do we really want to start multiple pieces?
 
         only_theirs -= peer.requests.keys()
         requests_left = min(requests_left, len(only_theirs))
