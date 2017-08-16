@@ -604,6 +604,7 @@ class FileSwarmService(WiredService):
 
     def complete_piece(self, piece):
         self.pending_pieces.pop(piece.piece_hash, None)
+        self.log('verifying piece', piece_hash=piece.piece_hash)
 
         if not piece.verify_hash():
             self.log('bad piece', piece=piece)
