@@ -138,13 +138,13 @@ class FileSessionPeer(object):
 
     def add_request(self, piece_no, pending_piece, offset, length):
         if not piece_no in self.requests:
-            self.requests[piece_no] = {}
-        self.requests[piece_no][offset] = length
+            self.requests[piece_no] = ((pending_piece, {}))
+        self.requests[piece_no][1][offset] = length
 
 
     def del_request(self, piece_no, offset):
         if piece_no in self.requests:
-            self.requests[piece_no].pop(offset, None)
+            self.requests[piece_no][1].pop(offset, None)
 
 
     def del_piece_requests(self, piece_no):
@@ -152,13 +152,13 @@ class FileSessionPeer(object):
 
 
     def get_rerequests(self):
-        return [(piece_no, offset, length) for piece_no, reqs in self.requests.items()
+        return [(piece_no, offset, length) for piece_no, (_, reqs) in self.requests.items()
                                                          for offset, length in reqs.items()]
 
 
     @property
     def req_count(self):
-        return sum(len(reqs) for reqs in self.requests.values())
+        return sum(len(reqs[1]) for reqs in self.requests.values())
 
 
     def __repr__(self):
