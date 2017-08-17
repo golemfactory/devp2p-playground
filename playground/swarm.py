@@ -151,6 +151,12 @@ class FileSessionPeer(object):
         self.requests.pop(piece_no, None)
 
 
+    def del_all_requests(self):
+        for pp, reqs in self.requests.values():
+            for offset, _ in reqs.items():
+                pp.del_request(self.peer, offset)
+
+
     def get_rerequests(self):
         return [(piece_no, offset, length) for piece_no, (_, reqs) in self.requests.items()
                                                          for offset, length in reqs.items()]
@@ -261,7 +267,9 @@ class FileSession(object):
 
 
     def del_peer(self, peer):
-        self.peers.pop(peer, None)
+        fspeer = self.peers.pop(peer, None)
+        if fspeer:
+            fspeer.del_all_requests()
 
 
 
@@ -273,13 +281,23 @@ class PendingPiece(object):
         self.fh = fh
         self.sessions = set()
         #self.peers = weakref.WeakSet() # peers who have it
-        self.subpieces = {} # offset -> (len, done)
+        self.subpieces = {} # offset -> (len, done, peer_protos)
 
 
     def add_request(self, session, piece_no, peer_proto, offset, length):
         self.sessions.add((session, piece_no))
         #self.peers.add(peer_proto)
-        self.subpieces[offset] = (length, False)
+        if not offset in self.subpieces:
+            self.subpieces[offset] = (length, False, set())
+        self.subpieces[offset][2].add(peer_proto)
+
+
+    def del_request(self, peer_proto, offset):
+        self.subpieces[offset][2].discard(peer_proto)
+
+        # If we're not done and requested from no peers, delete the entry
+        if not self.subpieces[offset][1] and not self.subpieces[offset][2]:
+            del self.subpieces[offset]
 
 
     def pick_subpiece(self, include_pending=False):
@@ -296,12 +314,12 @@ class PendingPiece(object):
 
     def receive_subpiece(self, offset, length):
         if not offset in self.subpieces:
-            #TODO: log('unsolicited subpiece', ...)
+            self.log('unsolicited subpiece', offset=offset, subpieces=self.subpieces)
             return None
         if self.subpieces[offset][0] != length or self.subpieces[offset][1]:
-            #TODO log this
+            self.log('weird subpiece', offset=offset, length=length, sp=self.subpieces[offset])
             return None
-        self.subpieces[offset] = (length, True)
+        self.subpieces[offset] = (length, True, set())
         return self.sessions.copy()
 
 
@@ -488,7 +506,7 @@ class FileSwarmService(WiredService):
     def on_wire_protocol_stop(self, proto):
         self.log('bye', peer=proto)
         self.peers.remove(proto)
-        for sess in self.file_sessions:
+        for sess in self.file_sessions.values():
             sess.del_peer(proto)
 
 
