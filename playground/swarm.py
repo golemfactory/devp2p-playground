@@ -18,6 +18,10 @@ from .file import HashedFile
 
 
 
+CALC_RATE_AFTER_VERIFY = True
+
+
+
 class FileSwarmProtocol(BaseProtocol):
     protocol_id = 2
     max_cmd_id = 6
@@ -227,7 +231,8 @@ class FileSession(object):
 
     def receive_subpiece(self, recv_time, proto, piece_no, offset, data):
         length = len(data)
-        self.peers[proto].recvd.append((recv_time, length))
+        if not CALC_RATE_AFTER_VERIFY:
+            self.peers[proto].recvd.append((recv_time, length))
         chunk = self.piece_stream(piece_no)
         chunk.seek(offset)
         chunk.write(data)
@@ -251,8 +256,10 @@ class FileSession(object):
         return data
 
 
-    def complete_piece(self, piece_no):
+    def complete_piece(self, proto, piece_no):
         self.hf.haveset.add(piece_no)
+        if CALC_RATE_AFTER_VERIFY:
+            self.peers[proto].recvd.append((time.time(), self.piece_length(piece_no)))
         for peer in self.peers.values():
             peer.del_piece_requests(piece_no)
 
@@ -464,7 +471,7 @@ class FileSwarmService(WiredService):
     }
 
     max_requests_per_peer = 3
-    request_size = 2 ** 14
+    request_size = HashedFile.chunk_size if CALC_RATE_AFTER_VERIFY else 2 ** 14
 
     wire_protocol = FileSwarmProtocol
 
@@ -611,7 +618,7 @@ class FileSwarmService(WiredService):
             sess.receive_subpiece(now, proto, piece_no, offset, data)
 
         if pp.check_complete():
-            self.complete_piece(pp)
+            self.complete_piece(proto, pp)
 
         for (sess, piece_no) in sessions:
             for peer in list(sess.peers.keys()):
@@ -620,7 +627,7 @@ class FileSwarmService(WiredService):
 
     # internal API
 
-    def complete_piece(self, piece):
+    def complete_piece(self, proto, piece):
         self.pending_pieces.pop(piece.piece_hash, None)
         self.log('verifying piece', piece_hash=piece.piece_hash)
 
@@ -630,7 +637,7 @@ class FileSwarmService(WiredService):
 
         self.log('complete piece', piece_hash=piece.piece_hash)
         for sess, piece_no in piece.sessions:
-            sess.complete_piece(piece_no)
+            sess.complete_piece(proto, piece_no)
             if sess.complete:
                 self.log('session completed', sess=sess)
             for peer in sess.peers.keys():
