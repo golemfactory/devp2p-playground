@@ -464,10 +464,28 @@ class PerSessionTitForTatChokingStrategy(ChokingStrategy):
 
 
 
+class PieceSelectionStrategy(object):
+    def __init__(self, service):
+        self.service = service
+
+    def pick(self, sess, available, count):
+        pass
+
+
+
+class RandomPieceSelectionStrategy(PieceSelectionStrategy):
+    def pick(self, sess, available, count):
+        return random.sample(available, count)
+
+
+
 class FileSwarmService(WiredService):
     name = 'fileswarm'
     default_config = {
-        'fileswarm': {'choking_strategy': NaiveChokingStrategy}
+        'fileswarm': {
+            'choking_strategy': NaiveChokingStrategy,
+            'piece_strategy': RandomPieceSelectionStrategy,
+        }
     }
 
     max_requests_per_peer = 3
@@ -482,7 +500,9 @@ class FileSwarmService(WiredService):
         self.peers = []
         self.pending_pieces = {}
         choking_strategy = self.config['fileswarm']['choking_strategy']
+        piece_strategy = self.config['fileswarm']['piece_strategy']
         self.choking_strategy = choking_strategy(self)
+        self.piece_strategy = piece_strategy(self)
 
 
     def log(self, text, **kargs):
@@ -709,7 +729,7 @@ class FileSwarmService(WiredService):
         requests_left = min(requests_left, len(only_theirs))
 
         if only_theirs:
-            to_request = random.sample(only_theirs, requests_left)
+            to_request = self.piece_strategy.pick(sess, only_theirs, requests_left)
             self.log('will request', ours=sess.pieces, theirs=theirs, only_theirs=only_theirs,
                                      to_request=to_request)
             for piece_no in to_request:
