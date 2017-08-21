@@ -725,7 +725,8 @@ class FileSwarmService(WiredService):
         # request a new piece
         # FIXME: do we really want to start multiple pieces?
 
-        only_theirs -= peer.requests.keys()
+        only_theirs -= {piece_no for piece_no in only_theirs if sess.piece_hash(piece_no) in self.pending_pieces}
+        #only_theirs -= peer.requests.keys()
         requests_left = min(requests_left, len(only_theirs))
 
         if only_theirs:
