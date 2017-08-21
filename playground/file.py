@@ -41,7 +41,7 @@ class ChunkStream(io.BufferedIOBase):
     def read(self, size=-1):
         return self._read(self.fh.read, size)
 
-    def read1(size=-1):
+    def read1(self, size=-1):
         return self._read(self.fh.read1, size)
 
     def write(self, data):
