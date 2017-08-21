@@ -2,6 +2,7 @@ import math
 import random
 import time
 import weakref
+import itertools
 
 from multihash import Multihash
 import multihash
@@ -476,6 +477,16 @@ class PieceSelectionStrategy(object):
 class RandomPieceSelectionStrategy(PieceSelectionStrategy):
     def pick(self, sess, available, count):
         return random.sample(available, count)
+
+
+
+class RarestFirstPieceSelectionStrategy(PieceSelectionStrategy):
+    def pick(self, sess, available, count):
+        available = list(available)
+        random.shuffle(available) # in case they have equal frequency
+        freqs = sorted(((piece_no, sum(piece_no in peer.pieces for peer in sess.peers.values())) for piece_no in available), key=lambda x: x[1])
+        self.service.log('piece freqs', freqs=freqs)
+        return list(itertools.islice((x[0] for x in freqs), count))
 
 
 
