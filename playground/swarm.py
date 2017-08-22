@@ -469,24 +469,59 @@ class PieceSelectionStrategy(object):
     def __init__(self, service):
         self.service = service
 
-    def pick(self, sess, available, count):
+    def pick(self, sess, proto, available, count):
         pass
 
 
 
 class RandomPieceSelectionStrategy(PieceSelectionStrategy):
-    def pick(self, sess, available, count):
+    def pick(self, sess, proto, available, count):
+        count = min(count, len(available))
         return random.sample(available, count)
 
 
 
 class RarestFirstPieceSelectionStrategy(PieceSelectionStrategy):
-    def pick(self, sess, available, count):
+    def pick(self, sess, proto, available, count):
+        count = min(count, len(available))
         available = list(available)
         random.shuffle(available) # in case they have equal frequency
         freqs = sorted(((piece_no, sum(piece_no in peer.pieces for peer in sess.peers.values())) for piece_no in available), key=lambda x: x[1])
         self.service.log('piece freqs', freqs=freqs)
         return list(itertools.islice((x[0] for x in freqs), count))
+
+
+
+class EndGamePieceSelectionStrategy(PieceSelectionStrategy):
+    def pick(self, sess, proto, available, count):
+        pending = {piece_no for piece_no, piece_hash in enumerate(sess.hf.hashes) if piece_hash in self.service.pending_pieces}
+        peer = sess.peers[proto] # type: FileSessionPeer
+        assert isinstance(peer, FileSessionPeer)
+        pending &= peer.pieces
+        pending -= peer.requests.keys()
+        count = min(count, len(pending))
+        return random.sample(pending, count)
+
+
+class BEP3PieceSelectionStrategy(PieceSelectionStrategy):
+    def __init__(self, service):
+        super(BEP3PieceSelectionStrategy, self).__init__(service)
+        self.early = RandomPieceSelectionStrategy(service)
+        self.mid = RarestFirstPieceSelectionStrategy(service)
+        self.late = EndGamePieceSelectionStrategy(service)
+
+
+    def pick(self, sess: FileSession, proto, available, count):
+        if not sess.pieces:
+            # We don't have any complete pieces yet, gotta get one ASAP
+            return self.early.pick(sess, proto, available, count)
+
+        if not available:
+            # We have requested everything we don't have, so speed up the last bit
+            # by means of the end-game mode
+            return self.late.pick(sess, proto, available, count)
+
+        return self.mid.pick(sess, proto, available, count)
 
 
 
@@ -738,14 +773,12 @@ class FileSwarmService(WiredService):
 
         only_theirs -= {piece_no for piece_no in only_theirs if sess.piece_hash(piece_no) in self.pending_pieces}
         #only_theirs -= peer.requests.keys()
-        requests_left = min(requests_left, len(only_theirs))
 
-        if only_theirs:
-            to_request = self.piece_strategy.pick(sess, only_theirs, requests_left)
-            self.log('will request', ours=sess.pieces, theirs=theirs, only_theirs=only_theirs,
-                                     to_request=to_request)
-            for piece_no in to_request:
-                self.request(sess, proto, piece_no, 0, self.request_size)
+        to_request = self.piece_strategy.pick(sess, proto, only_theirs, requests_left)
+        self.log('will request', ours=sess.pieces, theirs=theirs, only_theirs=only_theirs,
+                                 to_request=to_request)
+        for piece_no in to_request:
+            self.request(sess, proto, piece_no, 0, self.request_size)
 
 
 
