@@ -2,7 +2,6 @@ import os.path
 import io
 import struct
 
-import hashlib
 import multihash
 from multihash import Multihash
 from rlp.utils import bytes_to_str, encode_hex
@@ -95,7 +94,7 @@ class HashedFile(object):
         off = 0
         def read():
             nonlocal off
-            size = min(h.block_size, HashedFile.chunk_size - off)
+            size = min(block_size, self.chunk_size - off)
             data = self.fh.read(size)
             off += len(data)
             return data
@@ -151,7 +150,6 @@ class HashedFile(object):
         return ChunkStream(self.fh, off, self.get_chunk_size(chunk_no))
 
     def binary_metainfo(self):
-        log.debug('length', length=self.length)
         return struct.pack('>Q', self.length or 0) + b''.join(mh.encode(None) for mh in self.hashes)
 
     @classmethod
