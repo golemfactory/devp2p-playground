@@ -496,7 +496,6 @@ class EndGamePieceSelectionStrategy(PieceSelectionStrategy):
     def pick(self, sess, proto, available, count):
         pending = {piece_no for piece_no, piece_hash in enumerate(sess.hf.hashes) if piece_hash in self.service.pending_pieces}
         peer = sess.peers[proto] # type: FileSessionPeer
-        assert isinstance(peer, FileSessionPeer)
         pending &= peer.pieces
         pending -= peer.requests.keys()
         count = min(count, len(pending))
@@ -531,11 +530,10 @@ class FileSwarmService(WiredService):
         'fileswarm': {
             'choking_strategy': NaiveChokingStrategy,
             'piece_strategy': RandomPieceSelectionStrategy,
+            'max_request_per_peer': 3,
+            'request_size': None,
         }
     }
-
-    max_requests_per_peer = 3
-    request_size = HashedFile.chunk_size if CALC_RATE_AFTER_VERIFY else 2 ** 14
 
     wire_protocol = FileSwarmProtocol
 
@@ -549,6 +547,11 @@ class FileSwarmService(WiredService):
         piece_strategy = self.config['fileswarm']['piece_strategy']
         self.choking_strategy = choking_strategy(self)
         self.piece_strategy = piece_strategy(self)
+
+        self.max_requests_per_peer = self.config['fileswarm']['max_request_per_peer']
+        self.request_size = self.config['fileswarm']['request_size']
+        if self.request_size is None:
+            self.request_size = HashedFile.chunk_size if CALC_RATE_AFTER_VERIFY else 2 ** 14
 
 
     def log(self, text, **kargs):

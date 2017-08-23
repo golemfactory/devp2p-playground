@@ -6,7 +6,6 @@ import hashlib
 import multihash
 from multihash import Multihash
 from rlp.utils import bytes_to_str, encode_hex
-from devp2p import slogging
 
 try:
     from hashlib import blake2b
