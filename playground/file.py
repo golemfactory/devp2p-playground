@@ -1,6 +1,7 @@
 import os.path
 import io
 import struct
+import bson
 
 import multihash
 from multihash import Multihash
@@ -149,15 +150,26 @@ class HashedFile(object):
         off = self.chunk_size * chunk_no
         return ChunkStream(self.fh, off, self.get_chunk_size(chunk_no))
 
+    def metainfo(self):
+        return {
+            'hashes': [mh.encode(None) for mh in self.hashes],
+            'length': self.length,
+            }
+
     def binary_metainfo(self):
-        return struct.pack('>Q', self.length or 0) + b''.join(mh.encode(None) for mh in self.hashes)
+        def on_unknown(x):
+            log.error('cannot serialize', x=x)
+            raise Exception
+        return bson.dumps(self.metainfo(), on_unknown=on_unknown)
 
     @classmethod
     def from_path(cls, path):
         return cls(fh=open(path, 'rb'))
 
     @classmethod
-    def from_metainfo(cls, hashes, length=None, outfh=None, outdir=None):
+    def from_metainfo(cls, metainfo, outfh=None, outdir=None):
+        hashes = [multihash.decode(mh) for mh in metainfo['hashes']]
+        length = metainfo['length']
         if outfh:
             return cls(fh=outfh, hashes=hashes, length=length)
         if not outfh:
@@ -170,12 +182,7 @@ class HashedFile(object):
 
     @classmethod
     def from_binary_metainfo(cls, metainfo, outfh=None, outdir=None):
-        len_size = struct.calcsize('>Q')
-        length = struct.unpack('>Q', metainfo[:len_size])[0]
-        metainfo = metainfo[len_size:]
-        count = int(len(metainfo) / 66)
-        hashes = [multihash.decode(metainfo[(66 * i):(66 * (i+1))]) for i in range(count)]
-        return cls.from_metainfo(hashes, length, outfh, outdir)
+        return cls.from_metainfo(bson.loads(metainfo), outfh, outdir)
 
     def __repr__(self):
         return "<%s(%r, %r)>" % (self.__class__.__name__, self.fh, self.hashes)
