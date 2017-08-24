@@ -160,7 +160,9 @@ class HashedFile(object):
         def on_unknown(x):
             log.error('cannot serialize', x=x)
             raise Exception
-        return bson.dumps(self.metainfo(), on_unknown=on_unknown)
+        def sorter(obj, *args):
+            return sorted(obj.keys())
+        return bson.dumps(self.metainfo(), generator=sorter, on_unknown=on_unknown)
 
     @classmethod
     def from_path(cls, path):
