@@ -270,11 +270,12 @@ class PlaygroundService(WiredService):
     def cmd_seed(self, args, reply):
         try:
             filename = str_to_bytes(args)
-            f = open(filename, 'rb')
-            f = FileObjectThread(f, 'rb')
-            f = io.BufferedReader(f)
-            hf = HashedFile(fh=f)
+            #f = open(filename, 'rb')
+            #f = FileObjectThread(f, 'rb')
+            #f = io.BufferedReader(f)
+            hf = HashedFile.from_path(filename)
             reply(encode_hex(hf.tophash))
+            self.log('seed', tophash=hf.tophash, metainfo=hf.metainfo())
             fs = FileSession(hf)
             self.app.services.fileswarm.add_session(fs)
             self.broadcast('file_metainfo', hf.binary_metainfo())
@@ -358,9 +359,9 @@ class PlaygroundService(WiredService):
 
     def on_receive_file_metainfo(self, proto, data):
         assert isinstance(data, bytes)
-        hf = HashedFile.from_binary_metainfo(data)
+        hf = HashedFile.from_binary_metainfo(data, outdir=b'inbox')
         #tophash = multihash.digest(data, multihash.Func.sha3_256).encode(None)
-        self.log("receiving metainfo", tophash=hf.tophash)
+        self.log("receiving metainfo", tophash=hf.tophash, metainfo=hf.metainfo())
         fs = FileSession(hf)
         if self.app.services.fileswarm.add_session(fs):
             self.app.services.console.print('new metainfo %s' % encode_hex(hf.tophash))
