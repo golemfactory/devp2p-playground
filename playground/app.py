@@ -24,7 +24,7 @@ from devp2p.service import WiredService, BaseService
 from devp2p.utils import colors, COLOR_END, big_endian_to_int
 from devp2p import app_helper
 
-from .swarm import FileSwarmService, FileSession, PerSessionTitForTatChokingStrategy
+from .swarm import FileSwarmService, FileSession, PerSessionTitForTatChokingStrategy, BEP3PieceSelectionStrategy
 from .file import HashedFile
 from .consvc import Console
 
@@ -381,6 +381,7 @@ class PlaygroundApp(BaseApp):
 
     def __init__(self, config=default_config):
         config['fileswarm']['choking_strategy'] = PerSessionTitForTatChokingStrategy
+        config['fileswarm']['piece_strategy'] = BEP3PieceSelectionStrategy
         super(PlaygroundApp, self).__init__(config)
         #for service in PlaygroundApp.services:
         #    assert issubclass(service, BaseService)
