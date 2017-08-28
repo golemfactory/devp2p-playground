@@ -1,0 +1,5 @@
+-e git+https://github.com/Wolf480pl/pydevp2p.git@d5effa3a628bb1c67b37f1ad605939279e5956c6#egg=devp2p
+pymultihash
+pyblake2
+bson
+ethereum # for slogging
