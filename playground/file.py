@@ -12,12 +12,7 @@ try:
 except:
     from pyblake2 import blake2b
 
-try:
-    import ethereum.slogging as slogging
-    slogging.configure(config_string=':debug,p2p.discovery:info')
-    #slogging.configure(config_string=':debug,p2p:info')
-except:
-    import devp2p.slogging as slogging
+import devp2p.slogging as slogging
 
 log = slogging.get_logger('playground.file')
 
@@ -190,6 +185,13 @@ class HashedFile(object):
         return "<%s(%r, %r)>" % (self.__class__.__name__, self.fh, self.hashes)
 
 if __name__ == '__main__':
+    try:
+        import ethereum.slogging as slogging
+        slogging.configure(config_string=':debug,p2p.discovery:info')
+        #slogging.configure(config_string=':debug,p2p:info')
+    except:
+        import devp2p.slogging as slogging
+
     import sys
     hf = HashedFile.from_path(sys.argv[1])
     #hf.do_hash()
