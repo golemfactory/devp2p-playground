@@ -187,6 +187,7 @@ class FileSession(object):
         self.piece_count = piece_count
         #self.pieces = set()
         self.peers = weakref.WeakKeyDictionary()
+        self.complete_callbacks = []
 
 
     @property
@@ -279,6 +280,9 @@ class FileSession(object):
         if fspeer:
             fspeer.del_all_requests()
 
+
+    def add_complete_callback(self, callback):
+        self.complete_callbacks.append(callback)
 
 
 class PendingPiece(object):
@@ -708,9 +712,15 @@ class FileSwarmService(WiredService):
         for sess, piece_no in piece.sessions:
             sess.complete_piece(proto, piece_no)
             if sess.complete:
-                self.log('session completed', sess=sess)
+                self.complete_session(sess)
             for peer in sess.peers.keys():
                 peer.send_have(sess.tophash, piece_no)
+
+
+    def complete_session(self, sess):
+        self.log('session completed', sess=sess)
+        for cb in sess.complete_callbacks:
+            cb(sess)
 
 
     def unchoke(self, sess, proto):
