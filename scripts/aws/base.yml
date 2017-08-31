@@ -1,0 +1,7 @@
+---
+- hosts: tag_playground_node
+  remote_user: ubuntu
+  gather_facts: no
+  tasks:
+    - raw: sudo apt install -y python
+    - script: provision.base.sh

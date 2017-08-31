@@ -1,0 +1,20 @@
+---
+#- hosts: tag_playground_seed
+#  remote_user: ubuntu
+#  tasks:
+#    - ping:
+
+- hosts: tag_playground_node
+  remote_user: ubuntu
+  vars:
+    seed_enode: "enode://316d88516ff96ed22251f178684c6ea296d224be06e7ee301d363abd03aa9ad757b0fb647ad726e2367750e0f30c7240b010efe87a1ae9c5e9896f78e8827aff@{{hostvars[groups['tag_playground_seed'][0]]['ec2_ip_address']}}:29870"
+  tasks:
+    - script: ans-provision.app.sh
+      args:
+        creates: devp2p-playground
+    - template: src=run_many.py dest=devp2p-playground/run_many.py
+    - template: src=playground.service dest=/etc/systemd/system/playground.service
+      become: true
+    - copy: src=withlog.sh dest=. mode=a+rx
+    - systemd: name=playground state=restarted enabled=no daemon_reload=yes
+      become: true
