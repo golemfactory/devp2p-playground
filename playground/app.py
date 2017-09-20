@@ -360,7 +360,7 @@ class PlaygroundService(WiredService):
         assert isinstance(data, bytes)
         hf = HashedFile.from_binary_metainfo(data)
         #tophash = multihash.digest(data, multihash.Func.sha3_256).encode(None)
-        self.log("receiving metainfo", tophash=hf.tophash)
+        self.log("receiving metainfo", tophash=hf.tophash, ts=time.time())
         fs = FileSession(hf)
         def cb(sess):
             self.app.services.console.print('{0:%H:%M:%S} session complete {1}'.format(datetime.datetime.now(), encode_hex(hf.tophash)))
