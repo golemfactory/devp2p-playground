@@ -258,10 +258,10 @@ class FileSession(object):
         return data
 
 
-    def complete_piece(self, proto, piece_no):
+    def complete_piece(self, proto, piece_no, duplicate_count=1):
         self.hf.haveset.add(piece_no)
         if CALC_RATE_AFTER_VERIFY:
-            self.peers[proto].recvd.append((time.time(), self.piece_length(piece_no)))
+            self.peers[proto].recvd.append((time.time(), self.piece_length(piece_no) / duplicate_count))
         for peer in self.peers.values():
             peer.del_piece_requests(piece_no)
 
@@ -709,13 +709,17 @@ class FileSwarmService(WiredService):
             return
 
         self.log('complete piece', piece_hash=piece.piece_hash)
+
+        sessions_done = set()
         for sess, piece_no in piece.sessions:
-            sess.complete_piece(proto, piece_no)
+            sess.complete_piece(proto, piece_no, len(piece.sessions))
             if sess.complete:
-                self.complete_session(sess)
+                sessions_done.add(sess)
             for peer in sess.peers.keys():
                 peer.send_have(sess.tophash, piece_no)
 
+        for sess in sessions_done:
+            self.complete_session(sess)
 
     def complete_session(self, sess):
         self.log('session completed', sess=sess)
