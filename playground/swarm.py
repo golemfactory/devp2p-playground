@@ -297,7 +297,11 @@ class PendingPiece(object):
 
 
     def add_request(self, session, piece_no, peer_proto, offset, length):
-        self.sessions.add((session, piece_no))
+        piece_hash = session.piece_hash(piece_no)
+        for i in range(session.piece_count):
+            if session.piece_hash(i) == piece_hash:
+                self.sessions.add((session, i))
+
         #self.peers.add(peer_proto)
         if not offset in self.subpieces:
             self.subpieces[offset] = (length, False, set())
