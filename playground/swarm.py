@@ -726,7 +726,7 @@ class FileSwarmService(WiredService):
             self.complete_session(sess)
 
     def complete_session(self, sess):
-        self.log('session completed', sess=sess, ts=time.time())
+        self.log('session completed', sess=sess, tophash=encode_hex(sess.tophash), ts=time.time())
         for cb in sess.complete_callbacks:
             cb(sess)
 

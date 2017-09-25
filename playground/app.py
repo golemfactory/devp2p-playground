@@ -277,6 +277,7 @@ class PlaygroundService(WiredService):
             reply(encode_hex(hf.tophash))
             fs = FileSession(hf)
             self.app.services.fileswarm.add_session(fs)
+            self.log("sending metainfo", tophash=encode_hex(hf.tophash), ts=time.time())
             self.broadcast('file_metainfo', hf.binary_metainfo())
         except FileNotFoundError:
             reply(traceback.format_exc())
@@ -360,7 +361,7 @@ class PlaygroundService(WiredService):
         assert isinstance(data, bytes)
         hf = HashedFile.from_binary_metainfo(data)
         #tophash = multihash.digest(data, multihash.Func.sha3_256).encode(None)
-        self.log("receiving metainfo", tophash=hf.tophash, ts=time.time())
+        self.log("receiving metainfo", tophash=encode_hex(hf.tophash), ts=time.time())
         fs = FileSession(hf)
         def cb(sess):
             self.app.services.console.print('{0:%H:%M:%S} session complete {1}'.format(datetime.datetime.now(), encode_hex(hf.tophash)))
