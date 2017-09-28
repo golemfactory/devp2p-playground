@@ -17,6 +17,8 @@ from devp2p.service import WiredService, BaseService
 
 from .file import HashedFile
 
+from typing import Dict, List, Set, Tuple, Callable, Any
+
 
 
 CALC_RATE_AFTER_VERIFY = True
@@ -85,6 +87,7 @@ class FileSwarmProtocol(BaseProtocol):
         ]
 
 
+# FIXME: unused? does it even work?
 def set_to_bitmap(s, length=None):
     if not length:
         length = math.log2(max(s))
@@ -96,7 +99,7 @@ def set_to_bitmap(s, length=None):
     return bmap
 
 
-def bitmap_to_set(bmap):
+def bitmap_to_set(bmap) -> Set[int]:
     s = set()
     for i in range(len(bmap)):
         for j in range(8):
@@ -105,7 +108,7 @@ def bitmap_to_set(bmap):
     return s
 
 
-def _calc_rate(queue, period):
+def _calc_rate(queue, period) -> float:
     now = time.time()
     deadline = now - period
 
@@ -122,63 +125,71 @@ class FileSessionPeer(object):
     rate_avg_period = 20
 
 
-    def __init__(self, peer):
-        self.peer = peer
-        self.pieces = set()
+    def __init__(self, peer) -> None:
+        self.peer = peer    # type: FileSwarmProtocol
+        self.pieces = set() # type: Set[int]
         self.choked = True
         self.interested = False
         self.choking_us = True
         self.interesting_us = False
-        self.requests = {} # {piece_no -> (pending_piece, {offset -> length})}
-        self.sent = []
-        self.recvd = []
-        self.rate_up = 0
-        self.rate_down = 0
+
+                            # {piece_no -> (pending_piece, {offset -> length})}
+        self.requests = {}  # type: Dict[int, Tuple[PendingPiece, Dict[int, int]]]
+
+                            # [(timestamp, size)]
+        self.sent = []      # type: List[Tuple[float, int]]
+        self.recvd = []     # type: List[Tuple[float, int]]
+        self.rate_up = 0.0
+        self.rate_down = 0.0
 
 
-    def calc_rates(self):
+    def calc_rates(self) -> None:
         self.rate_up = _calc_rate(self.sent, self.rate_avg_period)
         self.rate_down = _calc_rate(self.recvd, self.rate_avg_period)
 
 
-    def add_request(self, piece_no, pending_piece, offset, length):
+    def add_request(self, piece_no, pending_piece, offset, length) -> None:
         if not piece_no in self.requests:
             self.requests[piece_no] = ((pending_piece, {}))
         self.requests[piece_no][1][offset] = length
 
 
-    def del_request(self, piece_no, offset):
+    def del_request(self, piece_no, offset) -> None:
         if piece_no in self.requests:
             self.requests[piece_no][1].pop(offset, None)
 
 
-    def del_piece_requests(self, piece_no):
+    def del_piece_requests(self, piece_no) -> None:
         self.requests.pop(piece_no, None)
 
 
-    def del_all_requests(self):
+    def del_all_requests(self) -> None:
         for pp, reqs in self.requests.values():
             for offset, _ in reqs.items():
                 pp.del_request(self.peer, offset)
 
 
-    def get_rerequests(self):
+    def get_rerequests(self) -> List[Tuple[int, int, int]]:
         return [(piece_no, offset, length) for piece_no, (_, reqs) in self.requests.items()
                                                          for offset, length in reqs.items()]
 
 
     @property
-    def req_count(self):
+    def req_count(self) -> int:
         return sum(len(reqs[1]) for reqs in self.requests.values())
 
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return '<%s(peer=%r up=%s down=%s)>' % (self.__class__.__name__, self.peer, self.rate_up, self.rate_down)
 
 
 
 class FileSession(object):
-    def __init__(self, hashed_file, piece_count=None):
+    """ A class representing a BitTorrent session
+    """
+    def __init__(self, hashed_file, piece_count=None) -> None:
+        """ Creates a new FileSession from a HashedFile
+        """
         self.hf = hashed_file
         if piece_count is None and self.hf.hashes:
             piece_count = len(self.hf.hashes)
@@ -186,25 +197,29 @@ class FileSession(object):
             raise ValueError("No piece count")
         self.piece_count = piece_count
         #self.pieces = set()
-        self.peers = weakref.WeakKeyDictionary()
-        self.complete_callbacks = []
+        self.peers = weakref.WeakKeyDictionary()  # type: weakref.WeakKeyDictionary[FileSwarmProtocol, FileSessionPeer]
+        self.complete_callbacks = []              # type: List[Callable[[FileSession],Any]]
 
 
     @property
-    def tophash(self):
+    def tophash(self) -> bytes:
+        """ The metainfo hash of this session
+        """
         return self.hf.tophash
 
 
     @property
-    def pieces(self):
+    def pieces(self) -> Set[int]:
+        """ A set of piece numbers of pieces that we have.
+        """
         return self.hf.haveset
 
 
-    def piece_length(self, piece_no):
+    def piece_length(self, piece_no) -> int:
         return self.hf.get_chunk_size(piece_no)
 
 
-    def piece_hash(self, piece_no):
+    def piece_hash(self, piece_no) -> Multihash:
         return self.hf.hashes[piece_no]
 
     def piece_stream(self, piece_no):
@@ -212,7 +227,9 @@ class FileSession(object):
 
 
     @property
-    def bitmap(self):
+    def bitmap(self) -> bytes:
+        """ A bitmap of pieces that we have.
+        """
         bmap = []
         x = 0
         for i in range(self.piece_count):
@@ -227,11 +244,13 @@ class FileSession(object):
 
 
     @property
-    def complete(self):
+    def complete(self) -> bool:
+        """ Whether we have the complete file
+        """
         return len(self.pieces) == self.piece_count
 
 
-    def receive_subpiece(self, recv_time, proto, piece_no, offset, data):
+    def receive_subpiece(self, recv_time, proto, piece_no, offset, data) -> None:
         length = len(data)
         if not CALC_RATE_AFTER_VERIFY:
             self.peers[proto].recvd.append((recv_time, length))
@@ -244,11 +263,11 @@ class FileSession(object):
             peer.del_request(piece_no, offset)
 
 
-    def add_request(self, proto, piece_no, pending_piece, offset, length):
+    def add_request(self, proto, piece_no, pending_piece, offset, length) -> None:
         self.peers[proto].add_request(piece_no, pending_piece, offset, length)
 
 
-    def send_subpiece(self, send_time, proto, piece_no, offset, length):
+    def send_subpiece(self, send_time, proto, piece_no, offset, length) -> bytes:
         chunk = self.piece_stream(piece_no)
         if not chunk:
             return None
@@ -258,7 +277,7 @@ class FileSession(object):
         return data
 
 
-    def complete_piece(self, proto, piece_no, duplicate_count=1):
+    def complete_piece(self, proto, piece_no, duplicate_count=1) -> None:
         self.hf.haveset.add(piece_no)
         if CALC_RATE_AFTER_VERIFY:
             self.peers[proto].recvd.append((time.time(), self.piece_length(piece_no) / duplicate_count))
@@ -266,7 +285,7 @@ class FileSession(object):
             peer.del_piece_requests(piece_no)
 
 
-    def add_peer(self, peer, pieces):
+    def add_peer(self, peer, pieces) -> bool:
         if peer in self.peers:
             return False
         fsp = FileSessionPeer(peer)
@@ -275,13 +294,17 @@ class FileSession(object):
         return True
 
 
-    def del_peer(self, peer):
+    def del_peer(self, peer) -> None:
         fspeer = self.peers.pop(peer, None)
         if fspeer:
             fspeer.del_all_requests()
 
 
-    def add_complete_callback(self, callback):
+    def add_complete_callback(self, callback) -> None:
+        """ Adds a callback to be called when this session completes.
+            The callback will not be called if the session is already complete
+            when this method is called.
+        """
         self.complete_callbacks.append(callback)
 
 
@@ -356,9 +379,9 @@ class PendingPiece(object):
         return cls(log, session.piece_hash(piece_no), session.piece_length(piece_no),
                    session.piece_stream(piece_no))
 
-def receive_with_session(fun):
+def receive_with_session(fun) -> Callable[[FileSwarmProtocol, bytes, Any], None]:
 
-    def wrapper(self, proto, tophash, **kwargs):
+    def wrapper(self, proto, tophash, **kwargs) -> None:
         assert isinstance(tophash, bytes)
         if not tophash in self.file_sessions:
             return
@@ -372,41 +395,60 @@ def receive_with_session(fun):
 
 
 class ChokingStrategy(object):
-    def __init__(self, service):
+    """ An interface for implementing choking strategies
+
+        The strategy should use FileSwarmService.choke() and .unchoke() methods
+        when it decides a peer should be chocked or unchoked.
+    """
+    def __init__(self, service) -> None:
         self.service = service
 
-    def start(self):
+    def start(self) -> None:
         pass
-    def stop(self):
+    def stop(self) -> None:
         pass
-    def peer_interested(self, sess, proto):
+    def peer_interested(self, sess, proto) -> None:
         pass
 
 
 class NaiveChokingStrategy(ChokingStrategy):
-    def peer_interested(self, sess, proto):
+    """ A naive choking strategy that unchokes everyone who's interested and
+        never chokes them again.
+    """
+    def peer_interested(self, sess, proto) -> None:
         if sess.peers[proto].interested:
             self.service.unchoke(sess, proto)
 
 
 class PerSessionTitForTatChokingStrategy(ChokingStrategy):
+    """ The tit-for-tat choking strategy described in BitTorrent whitepaper.
+        Every `period` seconds it selects `total_unchoke_cnt` peers to unchoke.
+        `regular_unchoke_cnt` peers with best rates are unchoked. The remaining
+        peers to unchoke are optimistic unchokes, which are picked randomly
+        every `optimistic_period_count` periods.
+
+        It spawns a greenlet to do its job.
+    """
+
     regular_unchoke_cnt = 3
     total_unchoke_cnt = 4
     period = 10
     optimistic_period_count = 3
 
     class SessionState(object):
-        def __init__(self):
+
+        def __init__(self) -> None:
             self.optimistic_lifetime = 0
+            self.optimistic_unchokes = set() # type: Set[FileSessionPeer]
 
 
-    def __init__(self, service):
+    def __init__(self, service) -> None:
         super(PerSessionTitForTatChokingStrategy, self).__init__(service)
         self.is_stopped = False
-        self.sessions = {}
+        self.sessions = {}  # type: Dict[bytes, PerSessionTitForTatChokingStrategy.SessionState]
 
 
-    def _rechoke_session(self, sess):
+    def _rechoke_session(self, sess) -> None:
         if not sess.tophash in self.sessions:
             self.sessions[sess.tophash] = self.SessionState()
         state = self.sessions[sess.tophash]
@@ -451,18 +493,18 @@ class PerSessionTitForTatChokingStrategy(ChokingStrategy):
                 self.service.choke(sess, proto)
 
 
-    def _rechoke_loop(self):
+    def _rechoke_loop(self) -> None:
         while not self.is_stopped:
             for sess in self.service.file_sessions.values():
                 self._rechoke_session(sess)
             gevent.sleep(self.period)
 
 
-    def start(self):
+    def start(self) -> None:
         self.greenlet = gevent.spawn(self._rechoke_loop)
 
 
-    def stop(self):
+    def stop(self) -> None:
         if self.is_stopped:
             return
         self.is_stopped = True
@@ -474,23 +516,42 @@ class PerSessionTitForTatChokingStrategy(ChokingStrategy):
 
 
 class PieceSelectionStrategy(object):
-    def __init__(self, service):
+    """ An interface for implementing piece selection strategies
+    """
+
+    def __init__(self, service) -> None:
         self.service = service
 
-    def pick(self, sess, proto, available, count):
-        pass
+    def pick(self, sess, proto, available, count) -> List[int]:
+        """ Picks the pieces to request next.
+
+            :param sess: the FileSession
+            :param proto: the peer's instance of FileSwarmProtocol
+            :param available: a list of pieces that the peer has, but we don't,
+                              and we haven't requested yet
+            :param count: the maximum number of pieces we can request this time
+
+            :returns: a list of pieces to request this time
+        """
 
 
 
 class RandomPieceSelectionStrategy(PieceSelectionStrategy):
-    def pick(self, sess, proto, available, count):
+    """ A piece selection strategy that selects randomly from the available
+        pieces. Good at the very beginning of download.
+    """
+    def pick(self, sess, proto, available, count) -> List[int]:
         count = min(count, len(available))
         return random.sample(available, count)
 
 
 
 class RarestFirstPieceSelectionStrategy(PieceSelectionStrategy):
-    def pick(self, sess, proto, available, count):
+    """ A piece selection strategy that selects available pieces which are
+        rarest among our neighbours. This increases the chances we'll have
+        a pieces that someone else wants.
+    """
+    def pick(self, sess, proto, available, count) -> List[int]:
         count = min(count, len(available))
         available = list(available)
         random.shuffle(available) # in case they have equal frequency
@@ -501,7 +562,12 @@ class RarestFirstPieceSelectionStrategy(PieceSelectionStrategy):
 
 
 class EndGamePieceSelectionStrategy(PieceSelectionStrategy):
-    def pick(self, sess, proto, available, count):
+    """ A piece selection strategy that takes all pieecs we've already requested
+        from other peers but not from this one, and randomly picks from them to
+        request from this peer too. This allows quickly finishing download once
+        all the remaining pieces are being requested from someone.
+    """
+    def pick(self, sess, proto, available, count) -> List[int]:
         pending = {piece_no for piece_no, piece_hash in enumerate(sess.hf.hashes) if piece_hash in self.service.pending_pieces}
         peer = sess.peers[proto] # type: FileSessionPeer
         pending &= peer.pieces
@@ -511,14 +577,19 @@ class EndGamePieceSelectionStrategy(PieceSelectionStrategy):
 
 
 class BEP3PieceSelectionStrategy(PieceSelectionStrategy):
-    def __init__(self, service):
+    """ The piece selection strategy described in BEP3 and BitTorrent
+        whitepaper, combining RandomPieceSelectionStrategy,
+        RarestFirstPieceSelectionStrategy and EndGamePieceSelectionStrategy
+        and choosing between them depending on the stage of download.
+    """
+    def __init__(self, service) -> None:
         super(BEP3PieceSelectionStrategy, self).__init__(service)
         self.early = RandomPieceSelectionStrategy(service)
         self.mid = RarestFirstPieceSelectionStrategy(service)
         self.late = EndGamePieceSelectionStrategy(service)
 
 
-    def pick(self, sess: FileSession, proto, available, count):
+    def pick(self, sess: FileSession, proto, available, count) -> List[int]:
         if not sess.pieces:
             # We don't have any complete pieces yet, gotta get one ASAP
             return self.early.pick(sess, proto, available, count)
@@ -533,6 +604,9 @@ class BEP3PieceSelectionStrategy(PieceSelectionStrategy):
 
 
 class FileSwarmService(WiredService):
+    """ A devP2P service implementing BitTorrent file transfer.
+    """
+
     name = 'fileswarm'
     default_config = {
         'fileswarm': {
@@ -546,11 +620,11 @@ class FileSwarmService(WiredService):
     wire_protocol = FileSwarmProtocol
 
 
-    def __init__(self, app):
+    def __init__(self, app) -> None:
         super(FileSwarmService, self).__init__(app)
-        self.file_sessions = {}
-        self.peers = []
-        self.pending_pieces = {}
+        self.file_sessions = {}   # type: Dict[bytes, FileSession]
+        self.peers = []           # type: List[FileSwarmProtocol]
+        self.pending_pieces = {}  # type: Dict[Multihash, PendingPiece]
         choking_strategy = self.config['fileswarm']['choking_strategy']
         piece_strategy = self.config['fileswarm']['piece_strategy']
         self.choking_strategy = choking_strategy(self)
@@ -562,21 +636,22 @@ class FileSwarmService(WiredService):
             self.request_size = HashedFile.chunk_size if CALC_RATE_AFTER_VERIFY else 2 ** 14
 
 
-    def log(self, text, **kargs):
+    def log(self, text, **kargs) -> None:
+        # TODO: replace this with something sensible
         self.app.services.playgroundservice.log(text, **kargs)
 
 
-    def start(self):
+    def start(self) -> None:
         super(FileSwarmService, self).start()
         self.choking_strategy.start()
 
 
-    def stop(self):
+    def stop(self) -> None:
         self.choking_strategy.stop()
         super(FileSwarmService, self).stop()
 
 
-    def on_wire_protocol_start(self, proto):
+    def on_wire_protocol_start(self, proto) -> None:
         assert isinstance(proto, self.wire_protocol)
         self.log("hello")
         self.peers.append(proto)
@@ -587,14 +662,14 @@ class FileSwarmService(WiredService):
             proto.send_bitmap(sess.tophash, sess.bitmap, False)
 
 
-    def on_wire_protocol_stop(self, proto):
+    def on_wire_protocol_stop(self, proto) -> None:
         self.log('bye', peer=proto)
         self.peers.remove(proto)
         for sess in self.file_sessions.values():
             sess.del_peer(proto)
 
 
-    def _setup_handlers(self, proto):
+    def _setup_handlers(self, proto) -> None:
         proto.receive_bitmap_callbacks.append(self.receive_bitmap)
         proto.receive_interested_callbacks.append(self.receive_interested)
         proto.receive_choke_callbacks.append(self.receive_choke)
@@ -605,7 +680,7 @@ class FileSwarmService(WiredService):
 
     # handlers
 
-    def receive_bitmap(self, proto, tophash, bitmap, is_reply):
+    def receive_bitmap(self, proto, tophash, bitmap, is_reply) -> None:
         assert isinstance(tophash, bytes)
         assert isinstance(bitmap, bytes)
         if not tophash in self.file_sessions:
@@ -625,7 +700,7 @@ class FileSwarmService(WiredService):
 
 
     @receive_with_session
-    def receive_interested(self, proto, sess, interested):
+    def receive_interested(self, proto, sess, interested) -> None:
         self.log('peer interested', proto=proto, sess=sess, tophash=encode_hex(sess.tophash),
                                     interested=interested)
         sess.peers[proto].interested = interested
@@ -633,7 +708,7 @@ class FileSwarmService(WiredService):
 
 
     @receive_with_session
-    def receive_choke(self, proto, sess, choked):
+    def receive_choke(self, proto, sess, choked) -> None:
 
         self.log('peer (un)choking', proto=proto, tophash=encode_hex(sess.tophash),
                                      choked=choked)
@@ -648,7 +723,7 @@ class FileSwarmService(WiredService):
 
 
     @receive_with_session
-    def receive_request(self, proto, sess, piece_no, offset, length):
+    def receive_request(self, proto, sess, piece_no, offset, length) -> None:
         self.log('peer requested piece', proto=proto, tophash=encode_hex(sess.tophash),
                                          piece_no=piece_no, choked=sess.peers[proto].choked,
                                          my_pieces=sess.pieces, offset=offset, length=length)
@@ -663,14 +738,14 @@ class FileSwarmService(WiredService):
 
 
     @receive_with_session
-    def receive_have(self, proto, sess, piece_no):
+    def receive_have(self, proto, sess, piece_no) -> None:
         self.log('peer got a piece', proto=proto, tophash=encode_hex(sess.tophash),
                                      piece_no=piece_no)
         sess.peers[proto].pieces.add(piece_no)
         self.recalc_interest(sess, proto)
 
 
-    def receive_piece(self, proto, piecehash, offset, data):
+    def receive_piece(self, proto, piecehash, offset, data) -> None:
         assert isinstance(piecehash, bytes)
         assert is_integer(offset)
         assert isinstance(data, bytes)
@@ -704,7 +779,7 @@ class FileSwarmService(WiredService):
 
     # internal API
 
-    def complete_piece(self, proto, piece):
+    def complete_piece(self, proto, piece) -> None:
         self.pending_pieces.pop(piece.piece_hash, None)
         self.log('verifying piece', piece_hash=piece.piece_hash)
 
@@ -725,27 +800,31 @@ class FileSwarmService(WiredService):
         for sess in sessions_done:
             self.complete_session(sess)
 
-    def complete_session(self, sess):
+    def complete_session(self, sess) -> None:
         self.log('session completed', sess=sess, tophash=encode_hex(sess.tophash), ts=time.time())
         for cb in sess.complete_callbacks:
             cb(sess)
 
 
-    def unchoke(self, sess, proto):
+    def unchoke(self, sess, proto) -> None:
+        """ Unchoke the specified peer in the specified session
+        """
         if not sess.peers[proto].choked:
             return
         sess.peers[proto].choked = False
         proto.send_choke(sess.tophash, False)
 
 
-    def choke(self, sess, proto):
+    def choke(self, sess, proto) -> None:
+        """ Choke the specified peer in the specified session
+        """
         if sess.peers[proto].choked:
             return
         sess.peers[proto].choked = True
         proto.send_choke(sess.tophash, True)
 
 
-    def request(self, sess, proto, piece_no, offset=0, length=None):
+    def request(self, sess, proto, piece_no, offset=0, length=None) -> None:
         if not length:
             length = sess.hf.chunk_size
 
@@ -762,7 +841,7 @@ class FileSwarmService(WiredService):
         proto.send_request(sess.tophash, piece_no, offset, length)
 
 
-    def recalc_interest(self, sess, proto):
+    def recalc_interest(self, sess, proto) -> None:
         peer = sess.peers[proto]
         theirs = peer.pieces
         only_theirs = theirs - sess.pieces
@@ -805,7 +884,15 @@ class FileSwarmService(WiredService):
 
     # API
 
-    def add_session(self, session):
+    def add_session(self, session) -> bool:
+        """ Adds a session and begins downloading or seeding. Does nothing if
+            a session with the same metainfo hash is already present.
+
+            :param session: a :class:`~playground.swarm.FileSession` instance
+                            to add
+
+            :returns: True if session was added, False if already present
+        """
         if session.tophash in self.file_sessions:
             return False
         self.file_sessions[session.tophash] = session
@@ -814,5 +901,7 @@ class FileSwarmService(WiredService):
         return True
 
 
-    def del_session(self, tophash):
+    def del_session(self, tophash) -> None:
+        """ Should remove a session. Untested, and most likely incomplete.
+        """
         del self.file_sessions[tophash]

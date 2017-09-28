@@ -7,6 +7,8 @@ import multihash
 from multihash import Multihash
 from rlp.utils import bytes_to_str, encode_hex
 
+from typing import Dict, List, Set, Any
+
 try:
     from hashlib import blake2b
 except:
@@ -17,6 +19,8 @@ import devp2p.slogging as slogging
 log = slogging.get_logger('playground.file')
 
 class ChunkStream(io.BufferedIOBase):
+    """ A file-like object for a single piece of a HashedFile
+    """
     def __init__(self, fh, base, length):
         self.fh = fh
         self.base = base
@@ -61,15 +65,34 @@ class ChunkStream(io.BufferedIOBase):
         return self.off
 
 class HashedFile(object):
+    """ A class for splitting a file into pieces, hashing each piece, and
+        handling metainfo.
+    """
+
     chunk_size = 2 ** 19
     hash_function = blake2b
 
-    def __init__(self, fh=None, hashes=None, haveset=None, length=None):
+    def __init__(self, fh=None, hashes=None, haveset=None, length=None) -> None:
+        """ Creates a new HashedFile.
+
+            :param fh: a file-like object for the backing file. Should always
+                       be provided. (Calling this constructor without fh is a
+                       hack used internally).
+            :param hashes: a list of piece hashes. If provided, the pieces in
+                           the backing file are checked against the hashes to
+                           determine which have been already downloaded.
+                           Otherwise, the file is assumed complete, and hashes
+                           are calculated from it.
+            :param haveset: TODO: delete this argument
+            :param length: length of the file. If not provided, it's set to
+                           the number of hashes multiplied by piece size, or the
+                           size of the backing file if hashes are notprovided.
+        """
         self.fh = fh
-        self.hashes = hashes
-        self.tophash = None
-        self.haveset = haveset
-        self.length = length
+        self.hashes = hashes    # type: List[Multihash]
+        self.tophash = None     # type: bytes
+        self.haveset = haveset  # type: Set[int]
+        self.length = length    # type: int
         if self.fh:
             if not self.hashes:
                 self._calc_hashes()
@@ -81,7 +104,7 @@ class HashedFile(object):
             if not self.length:
                 self.length = len(self.hashes) * self.chunk_size
 
-    def _hash_chunk(self, chunk_no):
+    def _hash_chunk(self, chunk_no) -> Multihash:
         #print(chunk_no)
         h = self.hash_function()
         block_size = min(self.chunk_size, h.block_size)
@@ -103,7 +126,7 @@ class HashedFile(object):
             data = read()
         return Multihash.from_hash(h)
 
-    def _calc_hashes(self):
+    def _calc_hashes(self) -> None:
         hashes = []
 
         i = 0
@@ -118,7 +141,7 @@ class HashedFile(object):
         self.fh.seek(0)
         #self._calc_tophash()
 
-    def _check_hashes(self):
+    def _check_hashes(self) -> None:
         haveset = set()
 
         for i, h in enumerate(self.hashes):
@@ -127,31 +150,35 @@ class HashedFile(object):
 
         self.haveset = haveset
 
-    def _calc_tophash(self):
+    def _calc_tophash(self) -> None:
         assert self.hashes
         self.tophash = multihash.digest(
             self.binary_metainfo(),
             multihash.Func.sha3_256).encode()
 
-    def get_chunk_size(self, chunk_no):
+    def get_chunk_size(self, chunk_no) -> int:
         if chunk_no > len(self.hashes):
             return None
         off = self.chunk_size * chunk_no
         return min(self.chunk_size, self.length - off)
 
-    def get_chunk_stream(self, chunk_no):
+    def get_chunk_stream(self, chunk_no) -> ChunkStream:
         if chunk_no > len(self.hashes):
             return None
         off = self.chunk_size * chunk_no
         return ChunkStream(self.fh, off, self.get_chunk_size(chunk_no))
 
-    def metainfo(self):
+    def metainfo(self) -> Dict[str, Any]:
+        """ Returns this file's metainfo dict
+        """
         return {
             'hashes': [mh.encode(None) for mh in self.hashes],
             'length': self.length,
             }
 
-    def binary_metainfo(self):
+    def binary_metainfo(self) -> bytes:
+        """ Returns this file's metainfo in binary fromat
+        """
         def on_unknown(x):
             log.error('cannot serialize', x=x)
             raise Exception
@@ -160,11 +187,31 @@ class HashedFile(object):
         return bson.dumps(self.metainfo(), generator=sorter, on_unknown=on_unknown)
 
     @classmethod
-    def from_path(cls, path):
+    def from_path(cls, path) -> HashedFile:
+        """ Creates a new HashedFile backed by the file at specified path,
+            assuming the file is complete and creating a new metainfo for it.
+
+            :returns: the newly created HashedFile
+        """
         return cls(fh=open(path, 'rb'))
 
     @classmethod
-    def from_metainfo(cls, metainfo, outfh=None, outdir=None):
+    def from_metainfo(cls, metainfo, outfh=None, outdir=None) -> HashedFile:
+        """ Creates a new HashedFile from the specified metainfo, creating a
+            backing file unless specified or already existing.
+            If the backing file already exists, its contents are checked against
+            hashes in the metainfo, to detect which pieces are already
+            downloaded.
+
+            :param metainfo: a metainfo dict.
+            :param outfh: an optional file-like object for the backing file.
+                          If not provided, file path will be autogenerated based
+                          on the metainfo hash.
+            :param outdir: an optional directory path to prepend to
+                           autogenerated file paths.
+
+            :returns: the newly created HashedFile
+        """
         hashes = [multihash.decode(mh) for mh in metainfo['hashes']]
         length = metainfo['length']
         if outfh:
@@ -178,7 +225,12 @@ class HashedFile(object):
             return cls(fh=open(fname, 'r+b'), hashes=hashes, length=length)
 
     @classmethod
-    def from_binary_metainfo(cls, metainfo, outfh=None, outdir=None):
+    def from_binary_metainfo(cls, metainfo, outfh=None, outdir=None) -> HashedFile:
+        """ Same as :func:`~playground.file.HashedFile.from_metainfo`
+            except it deserializes the metainfo from binary format first.
+
+            :param metainfo: a binary metainfo
+        """
         return cls.from_metainfo(bson.loads(metainfo), outfh, outdir)
 
     def __repr__(self):
